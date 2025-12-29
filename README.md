@@ -1,3 +1,16 @@
+# Joscheks UI Tweaks Fork
+
+This fork includes several tweaks that save me some clicks here and there.
+
+*   **10x Generation Button**: i regularly queue up large queues. this saves me from carpal tunnel syndrome. i know batches exist, but im too afraid of oom.
+*   **Cancel Queue Button**: A one click **Cancel** button. saves one click. i change my mind a lot.
+*   **Incremental Seeds**: An **Increment** option like is standart in Comfy. i sometimes test thinks and i rarely want to return to comfy to do that.
+*   **Apply image now also sets a favourite flag so you can clear out the history of bad generations**
+*   **Auto-apply transparency mask**: i use those pretty much everytime anyways. saves me 2 clicks.
+*   **Cleanup**: A **Clear History (Keep Favorites)** option added to the history menu to remove bad generations while preserving applied/favorite results.
+
+---
+
 <h1><img width="64px" src="ai_diffusion/icons/logo-128.png"> Generative AI <i>for Krita</i></h1>
 
 ✨[Features](#features) | ⭳ [Download](https://github.com/Acly/krita-ai-diffusion/releases/latest) | 🛠️[Installation](https://docs.interstice.cloud/installation) | 🎞️ [Video](https://youtu.be/Ly6USRwTHe0) | 🖼️[Gallery](#gallery) | 📖[User Guide](https://docs.interstice.cloud) | 💬[Discussion](https://github.com/Acly/krita-ai-diffusion/discussions) | 🗣️[Discord](https://discord.gg/pWyzHfHHhU)

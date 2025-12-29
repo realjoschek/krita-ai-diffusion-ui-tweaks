@@ -24,7 +24,7 @@ from ..util import ensure, flatten, sequence_equal
 from .widget import LayerCountWidget, WorkspaceSelectWidget, StyleSelectWidget, StrengthWidget
 from .widget import GenerateButton, QueueButton, ErrorBox, create_wide_tool_button
 from .region import RegionPromptWidget
-from . import theme
+from . import actions, theme
 
 
 class HistoryWidget(QListWidget):
@@ -103,6 +103,7 @@ class HistoryWidget(QListWidget):
             jobs.job_finished.connect(self.add),
             jobs.job_discarded.connect(self.remove),
             jobs.result_used.connect(self.update_image_thumbnail),
+            jobs.result_favorite_changed.connect(self.update_image_thumbnail),
             jobs.result_discarded.connect(self.remove_image),
         ]
         self.rebuild()
@@ -384,6 +385,8 @@ class HistoryWidget(QListWidget):
             thumb = Image.crop(thumb, Bounds(0, 0, thumb.extent.width, min_height))
         if job.result_was_used(index):  # add tiny star icon to mark used results
             thumb.draw_image(self._applied_icon, offset=(thumb.extent.width - 28, 4))
+        if job.is_favorite(index):
+            thumb.draw_image(self._applied_icon, offset=(4, 4))
         return thumb.to_icon()
 
     def _show_context_menu(self, pos: QPoint):
@@ -410,6 +413,10 @@ class HistoryWidget(QListWidget):
                 menu.setToolTipsVisible(True)
             menu.addAction(_("Discard Image"), self._discard_image)
             menu.addSeparator()
+            menu.addAction(
+                _("Clear History (Keep Favorites)"),
+                lambda: self._clear_all(keep_favorites=True),
+            )
             menu.addAction(_("Clear History"), self._clear_all)
             menu.exec(self.mapToGlobal(pos))
 
@@ -488,18 +495,25 @@ class HistoryWidget(QListWidget):
             if next_item >= 0:
                 self.setCurrentRow(next_item, QItemSelectionModel.SelectionFlag.Current)
 
-    def _clear_all(self):
+    def _clear_all(self, keep_favorites=False):
+        title = _("Clear History (Keep Favorites)") if keep_favorites else _("Clear History")
+        text = (
+            _("Are you sure you want to discard all generated images (except favorites)?")
+            if keep_favorites
+            else _("Are you sure you want to discard all generated images?")
+        )
         reply = QMessageBox.warning(
             self,
-            _("Clear History"),
-            _("Are you sure you want to discard all generated images?"),
+            title,
+            text,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
-            self._model.jobs.clear()
-            self.clear()
-            self._model.hide_preview(delete_layer=True)
+            self._model.jobs.clear(keep_favorites=keep_favorites)
+            self.rebuild()  # rebuild to reflect changes (some jobs might be removed)
+            if not keep_favorites:
+                self._model.hide_preview(delete_layer=True)
 
 
 class AnimatedListItem(QListWidgetItem):
@@ -757,9 +771,24 @@ class GenerationWidget(QWidget):
         self.queue_button = QueueButton(parent=self)
         self.queue_button.setFixedHeight(self.generate_button.height() - 2)
 
+        self.queue_random_button = QToolButton(self)
+        self.queue_random_button.setText("10x")
+        self.queue_random_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.queue_random_button.setToolTip(_("Queue 10 individual generations with random seeds"))
+        self.queue_random_button.setFixedHeight(self.generate_button.height() - 2)
+        self.queue_random_button.clicked.connect(lambda: self.model.generate_random_times(10))
+
+        self.cancel_queue_button = QToolButton(self)
+        self.cancel_queue_button.setIcon(theme.icon("cancel"))
+        self.cancel_queue_button.setToolTip(_("Cancel all queued generations"))
+        self.cancel_queue_button.setFixedHeight(self.generate_button.height() - 2)
+        self.cancel_queue_button.clicked.connect(actions.cancel_queued)
+
         actions_layout = QHBoxLayout()
         actions_layout.addLayout(generate_layout)
         actions_layout.addWidget(self.queue_button)
+        actions_layout.addWidget(self.queue_random_button)
+        actions_layout.addWidget(self.cancel_queue_button)
         layout.addLayout(actions_layout)
 
         self.progress_bar = ProgressBar(self)

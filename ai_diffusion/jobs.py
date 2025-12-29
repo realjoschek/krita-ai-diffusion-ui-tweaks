@@ -120,6 +120,7 @@ class Job:
     timestamp: datetime
     results: ImageCollection
     in_use: dict[int, bool]
+    favorites: dict[int, bool]
 
     def __init__(self, id: str | None, kind: JobKind, params: JobParams):
         self.id = id
@@ -128,9 +129,16 @@ class Job:
         self.timestamp = datetime.now()
         self.results = ImageCollection()
         self.in_use = {}
+        self.favorites = {}
 
     def result_was_used(self, index: int):
         return self.in_use.get(index, False)
+
+    def is_favorite(self, index: int):
+        return self.favorites.get(index, False)
+
+    def set_favorite(self, index: int, value: bool):
+        self.favorites[index] = value
 
 
 class JobQueue(QObject):
@@ -145,6 +153,7 @@ class JobQueue(QObject):
     job_finished = pyqtSignal(Job)
     job_discarded = pyqtSignal(Job)
     result_used = pyqtSignal(Item)
+    result_favorite_changed = pyqtSignal(Item)
     result_discarded = pyqtSignal(Item)
 
     def __init__(self):
@@ -213,6 +222,11 @@ class JobQueue(QObject):
         job.in_use[index] = True
         self.result_used.emit(self.Item(job_id, index))
 
+    def notify_favorite(self, job_id: str, index: int, value: bool):
+        job = ensure(self.find(job_id))
+        job.set_favorite(index, value)
+        self.result_favorite_changed.emit(self.Item(job_id, index))
+
     def select(self, job_id: str, index: int):
         self.selection = [self.Item(job_id, index)]
 
@@ -239,16 +253,33 @@ class JobQueue(QObject):
             return
         for i in range(index, len(job.results) - 1):
             job.in_use[i] = job.in_use.get(i + 1, False)
+            job.favorites[i] = job.favorites.get(i + 1, False)
         img = job.results.remove(index)
         self._memory_usage -= img.size / (1024**2)
         self.result_discarded.emit(self.Item(job_id, index))
 
-    def clear(self):
+    def clear(self, keep_favorites=False):
+        # First pass: discard individual non-favorite images from multi-image jobs
+        if keep_favorites:
+            for job in list(self._entries):
+                if job.kind is JobKind.diffusion and job.state is JobState.finished:
+                    # iterate backwards to safely remove
+                    for i in range(len(job.results) - 1, -1, -1):
+                        if not job.is_favorite(i):
+                            self.discard(ensure(job.id), i)
+
         jobs_to_discard = [
             job
             for job in self._entries
             if job.kind in (JobKind.diffusion, JobKind.animation) and job.state is JobState.finished
         ]
+        if keep_favorites:
+            jobs_to_discard = [
+                j
+                for j in jobs_to_discard
+                if not any(j.is_favorite(i) for i in range(len(j.results)))
+            ]
+
         for job in jobs_to_discard:
             self._discard_job(job)
 

@@ -104,6 +104,7 @@ class Model(QObject, ObservableProperties):
     batch_count = Property(1, persist=True)
     seed = Property(0, persist=True)
     fixed_seed = Property(False, persist=True)
+    incremental_seed = Property(False, persist=True)
     resolution_multiplier = Property(1.0, persist=True)
     queue_mode = Property(QueueMode.back, persist=True)
     translation_enabled = Property(True, persist=True)
@@ -120,6 +121,7 @@ class Model(QObject, ObservableProperties):
     batch_count_changed = pyqtSignal(int)
     seed_changed = pyqtSignal(int)
     fixed_seed_changed = pyqtSignal(bool)
+    incremental_seed_changed = pyqtSignal(bool)
     resolution_multiplier_changed = pyqtSignal(float)
     queue_mode_changed = pyqtSignal(QueueMode)
     translation_enabled_changed = pyqtSignal(bool)
@@ -171,6 +173,25 @@ class Model(QObject, ObservableProperties):
     def generate_replace(self):
         """Enqueue image generation with queue mode set to replace."""
         self._generate(QueueMode.replace)
+
+    def generate_random_times(self, count: int):
+        was_fixed = self.fixed_seed
+        was_batch = self.batch_count
+        self.fixed_seed = False
+        self.batch_count = 1
+
+        try:
+            mode = self.queue_mode
+            self._generate(mode)
+
+            if mode == QueueMode.replace:
+                mode = QueueMode.back
+
+            for _ in range(count - 1):
+                self._generate(mode)
+        finally:
+            self.fixed_seed = was_fixed
+            self.batch_count = was_batch
 
     def _generate(self, queue_mode: QueueMode):
         """Enqueue image generation for the current setup."""
@@ -231,6 +252,8 @@ class Model(QObject, ObservableProperties):
 
         original_conditioning = conditioning
         seed = self.seed if self.fixed_seed else workflow.generate_seed()
+        if not dryrun and self.fixed_seed and self.incremental_seed:
+            self.seed += 1
         conditioning, loras, layers, region_layers, prompt_meta = workflow.prepare_prompts(
             conditioning, self.style, seed, arch, FileLibrary.instance()
         )
@@ -680,7 +703,9 @@ class Model(QObject, ObservableProperties):
             else:
                 name = f"{prefix}{trim_text(params.name, 200)} ({params.seed})"
                 pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
-                self.layers.create(name, image, bounds, above=pos)
+                layer = self.layers.create(name, image, bounds, above=pos)
+                mask = Mask.rectangle(layer.bounds)
+                self.layers.create_mask("Transparency Mask", mask, layer.bounds, layer)
         else:  # apply to regions
             with RestoreActiveLayer(self.layers) as restore:
                 active_id = Region.link_target(self.layers.active).id_string
@@ -752,9 +777,12 @@ class Model(QObject, ObservableProperties):
         if job_region.is_background:
             insert_pos = self.regions.last_unlinked_layer(region_layer)
 
-        return self.layers.create(
+        layer = self.layers.create(
             name, region_image, region_bounds, parent=region_layer, above=insert_pos
         )
+        mask = Mask.rectangle(layer.bounds)
+        self.layers.create_mask("Transparency Mask", mask, layer.bounds, layer)
+        return layer
 
     def apply_generated_result(self, job_id: str, index: int):
         job = self.jobs.find(job_id)
@@ -778,6 +806,7 @@ class Model(QObject, ObservableProperties):
             self._layer = None
         self.jobs.selection = []
         self.jobs.notify_used(job_id, index)
+        self.jobs.notify_favorite(job_id, index, True)
 
     def apply_animation(self, job: Job):
         assert job.kind is JobKind.animation

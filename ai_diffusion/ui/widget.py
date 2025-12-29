@@ -115,6 +115,9 @@ class QueuePopup(QMenu):
         self._seed_input = QSpinBox(self)
         self._seed_check = QCheckBox(self)
         self._seed_check.setText(_("Fixed"))
+        self._increment_check = QCheckBox(self)
+        self._increment_check.setText(_("Increment"))
+        self._increment_check.setToolTip(_("Increment the fixed seed after each generation"))
         self._seed_input.setMinimum(0)
         self._seed_input.setMaximum(2**31 - 1)
         self._seed_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -127,6 +130,7 @@ class QueuePopup(QMenu):
         self._randomize_seed.setIcon(theme.icon("random"))
         seed_layout = QHBoxLayout()
         seed_layout.addWidget(self._seed_check)
+        seed_layout.addWidget(self._increment_check)
         seed_layout.addWidget(self._seed_input)
         seed_layout.addWidget(self._randomize_seed)
         self._layout.addLayout(seed_layout, 2, 1)
@@ -179,6 +183,7 @@ class QueuePopup(QMenu):
         self._model = model
         self._randomize_seed.setEnabled(self._model.fixed_seed)
         self._seed_input.setEnabled(self._model.fixed_seed)
+        self._increment_check.setEnabled(self._model.fixed_seed)
         self._batch_label.setText(str(self._model.batch_count))
         self._connections = [
             bind(self._model, "batch_count", self._batch_slider, "value"),
@@ -186,6 +191,11 @@ class QueuePopup(QMenu):
             bind(self._model, "seed", self._seed_input, "value"),
             bind(self._model, "fixed_seed", self._seed_check, "checked", Bind.one_way),
             self._seed_check.toggled.connect(lambda v: setattr(self._model, "fixed_seed", v)),
+            bind(self._model, "incremental_seed", self._increment_check, "checked", Bind.one_way),
+            self._increment_check.toggled.connect(
+                lambda v: setattr(self._model, "incremental_seed", v)
+            ),
+            self._model.fixed_seed_changed.connect(self._increment_check.setEnabled),
             self._model.fixed_seed_changed.connect(self._seed_input.setEnabled),
             self._model.fixed_seed_changed.connect(self._randomize_seed.setEnabled),
             self._randomize_seed.clicked.connect(self._model.generate_seed),

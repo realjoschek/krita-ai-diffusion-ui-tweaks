@@ -2,12 +2,18 @@
 
 This fork includes several tweaks that save me some clicks here and there.
 
+## UI Tweaks
+
 *   **10x Generation Button**: i regularly queue up large queues. this saves me from carpal tunnel syndrome. i know batches exist, but im too afraid of oom.
 *   **Cancel Queue Button**: A one click **Cancel** button. saves one click. i change my mind a lot.
 *   **Incremental Seeds**: An **Increment** option like is standart in Comfy. i sometimes test thinks and i rarely want to return to comfy to do that.
 *   **Apply image now also sets a favourite flag so you can clear out the history of bad generations**
 *   **Auto-apply transparency mask**: i use those pretty much everytime anyways. saves me 2 clicks.
 *   **Cleanup**: A **Clear History (Keep Favorites)** option added to the history menu to remove bad generations while preserving applied/favorite results.
+
+## Other Tweaks
+
+*   **Upscaling Noise Injection**: Added an option in the Upscale workspace to inject random noise into the image before running the upscale model. This can help fix some blurryness with some upscales.
 
 ---
 

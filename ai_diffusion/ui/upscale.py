@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QGroupBox,
+    QCheckBox,
 )
 
 from ..properties import Binding, Bind, bind, bind_combo, bind_toggle
@@ -127,6 +128,13 @@ class UpscaleWidget(QWidget):
         self.factor_widget.value_changed.connect(self._update_factor)
         layout.addWidget(self.factor_widget)
 
+        self.noise_checkbox = QCheckBox(_("Inject Noise"), self)
+        layout.addWidget(self.noise_checkbox)
+        self.noise_slider = StrengthWidget(
+            slider_range=(0, 20), prefix=_("Noise Strength") + ": ", parent=self
+        )
+        layout.addWidget(self.noise_slider)
+
         self.refinement_checkbox = QGroupBox(_("Refine upscaled image"), self)
         self.refinement_checkbox.setCheckable(True)
 
@@ -216,6 +224,8 @@ class UpscaleWidget(QWidget):
                 bind(model, "workspace", self.workspace_select, "value", Bind.one_way),
                 bind_combo(model.upscale, "upscaler", self.model_select),
                 bind(model.upscale, "factor", self.factor_widget, "value"),
+                bind_toggle(model.upscale, "inject_noise", self.noise_checkbox),
+                bind(model.upscale, "noise_strength", self.noise_slider, "value"),
                 bind_toggle(model.upscale, "use_diffusion", self.refinement_checkbox),
                 bind(model, "style", self.style_select, "value"),
                 bind(model.upscale, "strength", self.strength_slider, "value"),
@@ -235,6 +245,8 @@ class UpscaleWidget(QWidget):
             ]
             self.upscale_button.model = model
             self.queue_button.model = model
+            self.noise_checkbox.toggled.connect(self.noise_slider.setVisible)
+            self.noise_slider.setVisible(model.upscale.inject_noise)
             self._update_prompt()
             self._update_style()
             self._update_overlap()

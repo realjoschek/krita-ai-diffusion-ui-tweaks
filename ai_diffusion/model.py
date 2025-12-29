@@ -345,11 +345,15 @@ class Model(QObject, ObservableProperties):
         client = self._connection.client
         job.id = await client.enqueue(input, front)
 
-    def _prepare_upscale_image(self, dryrun=False):
+    def _prepare_upscale_image(self, dryrun=False, factor_override: float | None = None):
         client = self._connection.client
         extent = self._doc.extent
         image = self._doc.get_image(Bounds(0, 0, *extent)) if not dryrun else DummyImage(extent)
         params = self.upscale.params
+        if factor_override is not None:
+            target = extent * factor_override
+            params = replace(params, factor=factor_override, target_extent=target)
+
         params.upscale.model = params.upscale.model or client.models.default_upscaler
         if params.upscale.model not in client.models.upscalers:
             msg = _("The upscale model used by the document is not available on the server")
@@ -396,9 +400,21 @@ class Model(QObject, ObservableProperties):
         return input, job_params
 
     def upscale_image(self):
+        factor_override = None
+        if self.upscale.inject_noise:
+            try:
+                target = self.upscale.target_extent
+                if target != self.document.extent:
+                    self._doc.resize(target)
+                self._inject_noise_layer(self.upscale.noise_strength)
+                factor_override = 1.0
+            except Exception as e:
+                self.report_error(util.log_error(e))
+                return
+
         try:
             self.clear_error()
-            inputs, job_params = self._prepare_upscale_image()
+            inputs, job_params = self._prepare_upscale_image(factor_override=factor_override)
             job = self.jobs.add(JobKind.upscaling, job_params)
         except Exception as e:
             self.report_error(util.log_error(e))
@@ -409,6 +425,26 @@ class Model(QObject, ObservableProperties):
 
         self._doc.resize(job.params.bounds.extent)
         self.upscale.target_extent_changed.emit(self.upscale.target_extent)
+
+    def _inject_noise_layer(self, opacity_factor: float):
+        import numpy as np
+        from PyQt5.QtCore import QByteArray
+
+        img = self._get_current_image(Bounds(0, 0, *self._doc.extent))
+        arr = img.to_array()
+        # Add strong noise (level 99 equivalent)
+        noise = np.random.normal(0, 0.5, arr.shape)
+        arr = arr + noise
+        arr = np.clip(arr, 0, 1)
+
+        h, w, c = arr.shape
+        data = (arr * 255).astype(np.uint8).tobytes()
+        noisy_img = Image.from_packed_bytes(QByteArray(data), Extent(w, h), channels=c)
+
+        layer = self.layers.create("Noise Injection", noisy_img, Bounds(0, 0, w, h))
+        opacity = int(opacity_factor * 255)
+        layer.node.setOpacity(opacity)
+        layer.refresh()
 
     def estimate_cost(self, kind=JobKind.diffusion):
         try:
@@ -705,7 +741,7 @@ class Model(QObject, ObservableProperties):
                 pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
                 layer = self.layers.create(name, image, bounds, above=pos)
                 mask = Mask.rectangle(layer.bounds)
-                self.layers.create_mask("Transparency Mask", mask, layer.bounds, layer)
+                self.layers.create_mask("Transparency Mask", mask.to_image(), layer.bounds, layer)
         else:  # apply to regions
             with RestoreActiveLayer(self.layers) as restore:
                 active_id = Region.link_target(self.layers.active).id_string
@@ -781,7 +817,7 @@ class Model(QObject, ObservableProperties):
             name, region_image, region_bounds, parent=region_layer, above=insert_pos
         )
         mask = Mask.rectangle(layer.bounds)
-        self.layers.create_mask("Transparency Mask", mask, layer.bounds, layer)
+        self.layers.create_mask("Transparency Mask", mask.to_image(), layer.bounds, layer)
         return layer
 
     def apply_generated_result(self, job_id: str, index: int):
@@ -1045,6 +1081,8 @@ class UpscaleWorkspace(QObject, ObservableProperties):
     tile_overlap_mode = Property(TileOverlapMode.auto, persist=True)
     tile_overlap = Property(48, persist=True)
     use_prompt = Property(False, persist=True)
+    inject_noise = Property(False, persist=True)
+    noise_strength = Property(0.1, persist=True)
     can_generate = Property(True)
 
     upscaler_changed = pyqtSignal(str)
@@ -1055,6 +1093,8 @@ class UpscaleWorkspace(QObject, ObservableProperties):
     tile_overlap_mode_changed = pyqtSignal(TileOverlapMode)
     tile_overlap_changed = pyqtSignal(int)
     use_prompt_changed = pyqtSignal(bool)
+    inject_noise_changed = pyqtSignal(bool)
+    noise_strength_changed = pyqtSignal(int)
     target_extent_changed = pyqtSignal(Extent)
     can_generate_changed = pyqtSignal(bool)
     modified = pyqtSignal(QObject, str)

@@ -4,7 +4,6 @@ This fork includes several tweaks that save me some clicks here and there.
 
 ## UI Tweaks
 
-*   **SeedVR2 Upscaling**: High-quality upscaling using SeedVR2.
 *   **10x Generation Button**: i regularly queue up large queues. this saves me from carpal tunnel syndrome. i know batches exist, but im too afraid of oom.
 *   **Cancel Queue Button**: A one click **Cancel** button. saves one click. i change my mind a lot.
 *   **Incremental Seeds**: An **Increment** option like is standart in Comfy. i sometimes test thinks and i rarely want to return to comfy to do that.
@@ -14,6 +13,7 @@ This fork includes several tweaks that save me some clicks here and there.
 
 ## Other Tweaks
 
+*   **SeedVR2 Upscaling**: High-quality upscaling using SeedVR2.
 *   **Upscaling Noise Injection**: Added an option in the Upscale workspace to inject random noise into the image before running the upscale model. This can help fix some blurryness with some upscales.
 
 ---

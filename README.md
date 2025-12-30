@@ -9,7 +9,7 @@ Leave some feedback if you like.
 
 ## UI Tweaks
 
-*   **Quick LoRA Selectors**: Configurable LoRA slots directly in the Generation tab for quick access. 
+*   **Quick LoRA Selectors**: Moved Lora selection to the generation tab, so you don't have to go into style settings so often
 *   **10x Generation Button**: i regularly queue up large queues. this saves me from carpal tunnel syndrome. i know batches exist, but im too afraid of oom.
 *   **Cancel Queue Button**: A one click **Cancel** button. saves one click. i change my mind a lot.
 *   **Incremental Seeds**: An **Increment** option like is standart in Comfy. i sometimes test thinks and i rarely want to return to comfy to do that.

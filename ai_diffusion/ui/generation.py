@@ -24,6 +24,7 @@ from ..util import ensure, flatten, sequence_equal
 from .widget import LayerCountWidget, WorkspaceSelectWidget, StyleSelectWidget, StrengthWidget
 from .widget import GenerateButton, QueueButton, ErrorBox, create_wide_tool_button
 from .region import RegionPromptWidget
+from .quick_lora import QuickLoraList
 from . import actions, theme
 
 
@@ -738,6 +739,10 @@ class GenerationWidget(QWidget):
         self.custom_inpaint = CustomInpaintWidget(self)
         layout.addWidget(self.custom_inpaint)
 
+        self.lora_list = QuickLoraList(self)
+        self.lora_list.value_changed.connect(self._update_loras)
+        layout.addWidget(self.lora_list)
+
         self.generate_button = GenerateButton(JobKind.diffusion, self)
 
         self.inpaint_mode_button = QToolButton(self)
@@ -824,6 +829,7 @@ class GenerationWidget(QWidget):
                 model.regions.active_changed.connect(self.update_generate_options),
                 model.region_only_changed.connect(self.update_generate_options),
                 model.style_changed.connect(self.update_generate_options),
+                model.style_changed.connect(self._update_lora_widget),
                 model.edit_mode_changed.connect(self.update_generate_options),
                 self.add_control_button.clicked.connect(self.add_control),
                 self.add_region_button.clicked.connect(self.add_region),
@@ -838,6 +844,7 @@ class GenerationWidget(QWidget):
             self.progress_bar.model = model
             self.strength_slider.model = model
             self.history.model_ = model
+            self._update_lora_widget()
             self.update_generate_options()
 
     def apply_result(self, item: QListWidgetItem):
@@ -955,6 +962,15 @@ class GenerationWidget(QWidget):
 
     def add_control(self):
         self.model.active_regions.add_control()
+
+    def _update_lora_widget(self):
+        """Update the LoRA widget when the style changes."""
+        if self.model and self.model.style:
+            self.lora_list.set_style(self.model.style)
+
+    def _update_loras(self):
+        """Save LoRA changes from the widget back to the style."""
+        self.lora_list.update_style()
 
     def update_generate_options(self):
         if not self.model.has_document:

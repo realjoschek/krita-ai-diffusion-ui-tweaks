@@ -696,6 +696,7 @@ class StylePresets(SettingsTab):
         self._toggle_checkpoint_advanced(False)
 
         add("loras", LoraList(StyleSettings.loras, self))
+        add("quick_lora_count", SpinBoxSetting(StyleSettings.quick_lora_count, self, 0, 10))
         add("style_prompt", LineEditSetting(StyleSettings.style_prompt, self))
         add("negative_prompt", LineEditSetting(StyleSettings.negative_prompt, self))
 

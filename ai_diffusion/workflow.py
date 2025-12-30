@@ -1324,6 +1324,55 @@ def upscale_tiled(
     return w
 
 
+def upscale_seedvr2(
+    w: ComfyWorkflow,
+    image: Image,
+    extent: ExtentInput,
+    upscale: UpscaleInput,
+):
+    # Determine the target resolution from the extent (controlled by scale slider)
+    # This matches how legacy handles final size.
+    target_res = min(extent.target.width, extent.target.height)
+    target_res = (target_res // 2) * 2
+
+    # Scale the input image to match the target resolution before processing
+    current_min_side = min(image.width, image.height)
+    if current_min_side != target_res:
+        scale_factor = target_res / current_min_side
+        new_extent = image.extent * scale_factor
+        new_extent = Extent((new_extent.width // 2) * 2, (new_extent.height // 2) * 2)
+        image = Image.scale(image, new_extent)
+
+    img = w.load_image(image)
+    dit = w.load_seedvr2_dit(upscale.dit_model, "cuda")
+    vae = w.load_seedvr2_vae(
+        upscale.vae_model,
+        "cuda",
+        encode_tiled=upscale.encode_tiled,
+        encode_tile_size=upscale.encode_tile_size,
+        encode_tile_overlap=upscale.encode_tile_overlap,
+        decode_tiled=upscale.decode_tiled,
+        decode_tile_size=upscale.decode_tile_size,
+        decode_tile_overlap=upscale.decode_tile_overlap,
+    )
+
+    out = w.seedvr2_upscaler(
+        img,
+        dit,
+        vae,
+        seed=generate_seed(),
+        resolution=target_res,
+        batch_size=1,
+        color_correction="lab",
+    )
+    # Ensure final output size matches target exactly
+    if extent.target != extent.input:
+        out = w.scale_image(out, extent.target)
+
+    w.send_image(out)
+    return w
+
+
 def expand_custom(
     w: ComfyWorkflow,
     input: CustomWorkflowInput,
@@ -1667,6 +1716,9 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
     elif i.kind is WorkflowKind.upscale_simple:
         return upscale_simple(workflow, i.image, ensure(i.upscale).model, i.upscale_factor)
     elif i.kind is WorkflowKind.upscale_tiled:
+        upscale_params = ensure(i.upscale)
+        if upscale_params.is_seedvr2:
+            return upscale_seedvr2(workflow, i.image, i.extent, upscale_params)
         return upscale_tiled(
             workflow,
             i.image,
@@ -1674,7 +1726,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
             ensure(i.models),
             Conditioning.from_input(ensure(i.conditioning)),
             ensure(i.sampling),
-            ensure(i.upscale),
+            upscale_params,
             misc,
             models.for_arch(ensure(i.models).version),
         )

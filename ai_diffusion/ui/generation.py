@@ -383,8 +383,6 @@ class HistoryWidget(QListWidget):
         min_height = min(4 * self._apply_button.height(), 2 * self._thumb_size)
         if thumb.extent.height < min_height:
             thumb = Image.crop(thumb, Bounds(0, 0, thumb.extent.width, min_height))
-        if job.result_was_used(index):  # add tiny star icon to mark used results
-            thumb.draw_image(self._applied_icon, offset=(thumb.extent.width - 28, 4))
         if job.is_favorite(index):
             thumb.draw_image(self._applied_icon, offset=(4, 4))
         return thumb.to_icon()

@@ -196,6 +196,8 @@ class ClientModels:
         self.vae: list[str] = []
         self.loras: list[str] = []
         self.upscalers: list[str] = []
+        self.dit_models: list[str] = []
+        self.vae_models: list[str] = []
         self.node_inputs = ComfyObjectInfo({})
         self.resources: dict[str, str | None] = {}
 
@@ -208,6 +210,8 @@ class ClientModels:
         models.vae = data.get("vae", [])
         models.loras = data.get("loras", [])
         models.upscalers = data.get("upscalers", [])
+        models.dit_models = data.get("dit_models", [])
+        models.vae_models = data.get("vae_models", [])
         models.resources = data.get("resources", {})
         return models
 

@@ -154,6 +154,16 @@ class InpaintParams:
 class UpscaleInput:
     model: str = ""  # if empty do tiled refine without upscale model
     tile_overlap: int = -1
+    # SeedVR2 parameters
+    is_seedvr2: bool = False
+    dit_model: str = ""
+    vae_model: str = ""
+    encode_tiled: bool = False
+    encode_tile_size: int = 1024
+    encode_tile_overlap: int = 128
+    decode_tiled: bool = False
+    decode_tile_size: int = 1024
+    decode_tile_overlap: int = 128
 
 
 @dataclass

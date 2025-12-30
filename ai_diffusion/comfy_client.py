@@ -197,6 +197,9 @@ class ComfyClient(Client):
         inpaint_models = nodes.options("INPAINT_LoadInpaintModel", "model_name")
         available_resources.update(_find_inpaint_models(inpaint_models))
 
+        models.dit_models = nodes.options("SeedVR2LoadDiTModel", "model")
+        models.vae_models = nodes.options("SeedVR2LoadVAEModel", "model")
+
         loras = nodes.options("LoraLoader", "lora_name")
         available_resources.update(_find_loras(loras))
 

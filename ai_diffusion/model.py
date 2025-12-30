@@ -1067,12 +1067,18 @@ class UpscaleParams:
     seed: int
 
 
+class UpscaleMethod(Enum):
+    legacy = 0
+    seedvr2 = 1
+
+
 class TileOverlapMode(Enum):
     auto = 0
     custom = 1
 
 
 class UpscaleWorkspace(QObject, ObservableProperties):
+    method = Property(UpscaleMethod.legacy, persist=True)
     upscaler = Property("", persist=True)
     factor = Property(2.0, persist=True, setter="_set_factor")
     use_diffusion = Property(True, persist=True)
@@ -1083,8 +1089,18 @@ class UpscaleWorkspace(QObject, ObservableProperties):
     use_prompt = Property(False, persist=True)
     inject_noise = Property(False, persist=True)
     noise_strength = Property(0.1, persist=True)
+    # SeedVR2
+    dit_model = Property("", persist=True)
+    vae_model = Property("", persist=True)
+    encode_tiled = Property(False, persist=True)
+    encode_tile_size = Property(1024, persist=True)
+    encode_tile_overlap = Property(128, persist=True)
+    decode_tiled = Property(False, persist=True)
+    decode_tile_size = Property(1024, persist=True)
+    decode_tile_overlap = Property(128, persist=True)
     can_generate = Property(True)
 
+    method_changed = pyqtSignal(UpscaleMethod)
     upscaler_changed = pyqtSignal(str)
     factor_changed = pyqtSignal(float)
     use_diffusion_changed = pyqtSignal(bool)
@@ -1095,6 +1111,14 @@ class UpscaleWorkspace(QObject, ObservableProperties):
     use_prompt_changed = pyqtSignal(bool)
     inject_noise_changed = pyqtSignal(bool)
     noise_strength_changed = pyqtSignal(int)
+    dit_model_changed = pyqtSignal(str)
+    vae_model_changed = pyqtSignal(str)
+    encode_tiled_changed = pyqtSignal(bool)
+    encode_tile_size_changed = pyqtSignal(int)
+    encode_tile_overlap_changed = pyqtSignal(int)
+    decode_tiled_changed = pyqtSignal(bool)
+    decode_tile_size_changed = pyqtSignal(int)
+    decode_tile_overlap_changed = pyqtSignal(int)
     target_extent_changed = pyqtSignal(Extent)
     can_generate_changed = pyqtSignal(bool)
     modified = pyqtSignal(QObject, str)
@@ -1112,6 +1136,10 @@ class UpscaleWorkspace(QObject, ObservableProperties):
         if client := model._connection.client_if_connected:
             if self.upscaler not in client.models.upscalers:
                 self.upscaler = client.models.default_upscaler
+            if self.dit_model == "" and len(client.models.dit_models) > 0:
+                self.dit_model = client.models.dit_models[0]
+            if self.vae_model == "" and len(client.models.vae_models) > 0:
+                self.vae_model = client.models.vae_models[0]
 
     def set_in_progress(self, in_progress: bool):
         self._in_progress = in_progress
@@ -1135,8 +1163,21 @@ class UpscaleWorkspace(QObject, ObservableProperties):
     def params(self):
         model = ensure(self._model())
         overlap = self.tile_overlap if self.tile_overlap_mode is TileOverlapMode.custom else -1
+        upscale_input = UpscaleInput(
+            model=self.upscaler,
+            tile_overlap=overlap,
+            is_seedvr2=self.method is UpscaleMethod.seedvr2,
+            dit_model=self.dit_model,
+            vae_model=self.vae_model,
+            encode_tiled=self.encode_tiled,
+            encode_tile_size=self.encode_tile_size,
+            encode_tile_overlap=self.encode_tile_overlap,
+            decode_tiled=self.decode_tiled,
+            decode_tile_size=self.decode_tile_size,
+            decode_tile_overlap=self.decode_tile_overlap,
+        )
         return UpscaleParams(
-            upscale=UpscaleInput(self.upscaler, overlap),
+            upscale=upscale_input,
             factor=self.factor,
             use_diffusion=self.use_diffusion,
             unblur_strength=self.unblur_strength,

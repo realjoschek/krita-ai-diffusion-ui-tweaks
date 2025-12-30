@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 
 from ..properties import Binding, Bind, bind, bind_combo, bind_toggle
 from ..resources import ControlMode, UpscalerName
-from ..model import Model, TileOverlapMode
+from ..model import Model, TileOverlapMode, UpscaleMethod
 from ..jobs import JobKind
 from ..localization import translate as _
 from ..root import root
@@ -118,11 +118,68 @@ class UpscaleWidget(QWidget):
         self.setLayout(layout)
 
         self.workspace_select = WorkspaceSelectWidget(self)
+        self.method_select = QComboBox(self)
+        self.method_select.addItem(_("Legacy Upscaling"), UpscaleMethod.legacy)
+        self.method_select.addItem(_("SeedVR2 Upscaling"), UpscaleMethod.seedvr2)
+
         self.model_select = QComboBox(self)
         model_layout = QHBoxLayout()
         model_layout.addWidget(self.workspace_select)
+        model_layout.addWidget(self.method_select)
         model_layout.addWidget(self.model_select)
         layout.addLayout(model_layout)
+
+        # SeedVR2 widgets
+        self.seedvr2_group = QWidget(self)
+        seedvr2_layout = QVBoxLayout(self.seedvr2_group)
+        seedvr2_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.dit_model_select = QComboBox(self)
+        self.vae_model_select = QComboBox(self)
+        dit_layout = QHBoxLayout()
+        dit_layout.addWidget(QLabel(_("DiT Model"), self), 1)
+        dit_layout.addWidget(self.dit_model_select, 2)
+        vae_layout = QHBoxLayout()
+        vae_layout.addWidget(QLabel(_("VAE Model"), self), 1)
+        vae_layout.addWidget(self.vae_model_select, 2)
+
+        self.encode_tiled_check = QCheckBox(_("Encode Tiled"), self)
+        self.encode_tile_size_input = QSpinBox(self)
+        self.encode_tile_size_input.setRange(64, 4096)
+        self.encode_tile_size_input.setSingleStep(32)
+        self.encode_tile_overlap_input = QSpinBox(self)
+        self.encode_tile_overlap_input.setRange(0, 512)
+        self.encode_tile_overlap_input.setSingleStep(32)
+
+        self.decode_tiled_check = QCheckBox(_("Decode Tiled"), self)
+        self.decode_tile_size_input = QSpinBox(self)
+        self.decode_tile_size_input.setRange(64, 4096)
+        self.decode_tile_size_input.setSingleStep(32)
+        self.decode_tile_overlap_input = QSpinBox(self)
+        self.decode_tile_overlap_input.setRange(0, 512)
+        self.decode_tile_overlap_input.setSingleStep(32)
+
+        seedvr2_layout.addLayout(dit_layout)
+        seedvr2_layout.addLayout(vae_layout)
+
+        tiling_layout = QVBoxLayout()
+        enc_layout = QHBoxLayout()
+        enc_layout.addWidget(self.encode_tiled_check)
+        enc_layout.addWidget(QLabel(_("Size"), self))
+        enc_layout.addWidget(self.encode_tile_size_input)
+        enc_layout.addWidget(QLabel(_("Overlap"), self))
+        enc_layout.addWidget(self.encode_tile_overlap_input)
+
+        dec_layout = QHBoxLayout()
+        dec_layout.addWidget(self.decode_tiled_check)
+        dec_layout.addWidget(QLabel(_("Size"), self))
+        dec_layout.addWidget(self.decode_tile_size_input)
+        dec_layout.addWidget(QLabel(_("Overlap"), self))
+        dec_layout.addWidget(self.decode_tile_overlap_input)
+
+        seedvr2_layout.addLayout(enc_layout)
+        seedvr2_layout.addLayout(dec_layout)
+        layout.addWidget(self.seedvr2_group)
 
         self.factor_widget = FactorWidget(self)
         self.factor_widget.value_changed.connect(self._update_factor)
@@ -222,6 +279,7 @@ class UpscaleWidget(QWidget):
             self._model = model
             self._model_bindings = [
                 bind(model, "workspace", self.workspace_select, "value", Bind.one_way),
+                bind_combo(model.upscale, "method", self.method_select),
                 bind_combo(model.upscale, "upscaler", self.model_select),
                 bind(model.upscale, "factor", self.factor_widget, "value"),
                 bind_toggle(model.upscale, "inject_noise", self.noise_checkbox),
@@ -233,8 +291,17 @@ class UpscaleWidget(QWidget):
                 bind_combo(model.upscale, "tile_overlap_mode", self.overlap_custom_combo),
                 bind(model.upscale, "tile_overlap", self.overlap_input, "value"),
                 bind_toggle(model.upscale, "use_prompt", self.use_prompt_switch),
+                bind_combo(model.upscale, "dit_model", self.dit_model_select),
+                bind_combo(model.upscale, "vae_model", self.vae_model_select),
+                bind_toggle(model.upscale, "encode_tiled", self.encode_tiled_check),
+                bind(model.upscale, "encode_tile_size", self.encode_tile_size_input, "value"),
+                bind(model.upscale, "encode_tile_overlap", self.encode_tile_overlap_input, "value"),
+                bind_toggle(model.upscale, "decode_tiled", self.decode_tiled_check),
+                bind(model.upscale, "decode_tile_size", self.decode_tile_size_input, "value"),
+                bind(model.upscale, "decode_tile_overlap", self.decode_tile_overlap_input, "value"),
                 bind(model.upscale, "can_generate", self.upscale_button, "enabled", Bind.one_way),
                 bind(model, "error", self.error_box, "error", Bind.one_way),
+                model.upscale.method_changed.connect(self._update_method),
                 model.upscale.tile_overlap_mode_changed.connect(self._update_overlap),
                 model.upscale.use_prompt_changed.connect(self._update_prompt),
                 model.regions.modified.connect(self._update_prompt),
@@ -250,6 +317,7 @@ class UpscaleWidget(QWidget):
             self._update_prompt()
             self._update_style()
             self._update_overlap()
+            self._update_method()
             self.update_progress()
 
     def update_models(self):
@@ -276,11 +344,33 @@ class UpscaleWidget(QWidget):
                 selected = self.model_select.findData(self.model.upscale.upscaler)
                 self.model_select.setCurrentIndex(max(selected, 0))
 
+            with SignalBlocker(self.dit_model_select):
+                self.dit_model_select.clear()
+                for file in client.models.dit_models:
+                    self.dit_model_select.addItem(file, file)
+                selected = self.dit_model_select.findData(self.model.upscale.dit_model)
+                self.dit_model_select.setCurrentIndex(max(selected, 0))
+
+            with SignalBlocker(self.vae_model_select):
+                self.vae_model_select.clear()
+                for file in client.models.vae_models:
+                    self.vae_model_select.addItem(file, file)
+                selected = self.vae_model_select.findData(self.model.upscale.vae_model)
+                self.vae_model_select.setCurrentIndex(max(selected, 0))
+
     def update_progress(self):
         self.progress_bar.setValue(int(self.model.progress * 100))
 
     def upscale(self):
         self.model.upscale_image()
+
+    def _update_method(self):
+        is_seedvr2 = self.model.upscale.method is UpscaleMethod.seedvr2
+        self.model_select.setVisible(not is_seedvr2)
+        self.noise_checkbox.setVisible(not is_seedvr2)
+        self.noise_slider.setVisible(not is_seedvr2 and self.model.upscale.inject_noise)
+        self.refinement_checkbox.setVisible(not is_seedvr2)
+        self.seedvr2_group.setVisible(is_seedvr2)
 
     def _update_overlap(self):
         self.overlap_input.setEnabled(

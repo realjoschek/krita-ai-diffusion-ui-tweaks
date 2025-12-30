@@ -22,6 +22,9 @@ Leave some feedback if you like.
 *   **SeedVR2 Upscaling**: upscaling using SeedVR2. Important: For now you need to install [https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler) by hand to use this.
 *   **Upscaling Noise Injection**: Added an option in the Upscale workspace to inject random noise into the image before running the upscale model. This can help fix some blurryness with some upscales.
 
+
+## Installation
+
 If you'd like to test (or just use it) here are some quick quick install instructions:
 
 ```bash

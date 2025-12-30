@@ -2,6 +2,23 @@ from __future__ import annotations
 
 from typing import Optional, cast
 from pathlib import Path
+
+# Shared LoRA filter instance
+_shared_lora_filter = None
+
+
+def get_shared_lora_filter():
+    """Get the shared LoRA filter instance used across Settings and Generation tabs."""
+    global _shared_lora_filter
+    if _shared_lora_filter is None:
+        from ..files import FileFilter
+        from ..root import root
+
+        _shared_lora_filter = FileFilter(root.files.loras)
+        _shared_lora_filter.available_only = True
+    return _shared_lora_filter
+
+
 from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
@@ -695,8 +712,52 @@ class StylePresets(SettingsTab):
             widget.indent = 1
         self._toggle_checkpoint_advanced(False)
 
-        add("loras", LoraList(StyleSettings.loras, self))
-        add("quick_lora_count", SpinBoxSetting(StyleSettings.quick_lora_count, self, 0, 10))
+        # LoRA file management (without showing the list)
+        add_header(self._layout, StyleSettings.loras)
+
+        self._loras_filter = get_shared_lora_filter()
+
+        self._add_lora_button = QPushButton(_("Add"), self)
+        self._add_lora_button.setMinimumWidth(100)
+        self._add_lora_button.clicked.connect(self._add_lora_to_style)
+
+        self._upload_lora_button = QPushButton(theme.icon("upload"), "  " + _("Upload"), self)
+        self._upload_lora_button.setToolTip(_("Import a LoRA file from your local system"))
+        self._upload_lora_button.clicked.connect(self._upload_lora)
+
+        self._lora_filter_combo = QComboBox(self)
+        self._lora_filter_combo.setMinimumWidth(150)
+        self._lora_filter_combo.currentIndexChanged.connect(self._apply_lora_filter)
+
+        self._refresh_lora_button = QToolButton(self)
+        self._refresh_lora_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._refresh_lora_button.setIcon(Krita.instance().icon("reload-preset"))
+        self._refresh_lora_button.setToolTip(_("Look for new LoRA files"))
+        self._refresh_lora_button.clicked.connect(root.connection.refresh)
+
+        self._open_lora_folder_button = None
+        if settings.server_mode is ServerMode.managed:
+            self._open_lora_folder_button = QToolButton(self)
+            self._open_lora_folder_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            self._open_lora_folder_button.setIcon(Krita.instance().icon("document-open"))
+            self._open_lora_folder_button.setToolTip(_("Open folder containing LoRA files"))
+            self._open_lora_folder_button.clicked.connect(self._open_lora_folder)
+
+        lora_buttons_layout = QHBoxLayout()
+        lora_buttons_layout.addWidget(self._add_lora_button)
+        lora_buttons_layout.addWidget(self._upload_lora_button)
+        lora_buttons_layout.addWidget(self._lora_filter_combo)
+        lora_buttons_layout.addWidget(self._refresh_lora_button)
+        if self._open_lora_folder_button:
+            lora_buttons_layout.addWidget(self._open_lora_folder_button)
+        lora_buttons_layout.addStretch()
+
+        self._layout.addLayout(lora_buttons_layout)
+
+        root.files.loras.rowsInserted.connect(self._collect_lora_filters)
+        root.files.loras.rowsRemoved.connect(self._collect_lora_filters)
+        self._collect_lora_filters()
+
         add("style_prompt", LineEditSetting(StyleSettings.style_prompt, self))
         add("negative_prompt", LineEditSetting(StyleSettings.negative_prompt, self))
 
@@ -723,8 +784,6 @@ class StylePresets(SettingsTab):
                 _("Open the folder where checkpoints are stored"),
                 self._open_checkpoints_folder,
             )
-        if self._style_widgets["loras"].open_folder_button:
-            self._style_widgets["loras"].open_folder_button.clicked.connect(self._open_lora_folder)
 
         self._populate_style_list()
         Styles.list().changed.connect(self._update_style_list)
@@ -867,6 +926,58 @@ class StylePresets(SettingsTab):
             style.checkpoints = [value]
         self._set_checkpoint_warning()
         self._show_edit_style(style)
+
+    def _collect_lora_filters(self):
+        """Populate the LoRA filter combo with available folders."""
+        with SignalBlocker(self._lora_filter_combo):
+            self._lora_filter_combo.clear()
+            self._lora_filter_combo.addItem(icon("filter"), "All")
+            folders = set()
+            for lora in root.files.loras:
+                if lora.source is not FileSource.unavailable:
+                    parts = Path(lora.id).parts
+                    for i in range(1, len(parts)):
+                        folders.add("/".join(parts[:i]))
+            folder_icon = Krita.instance().icon("document-open")
+            for folder in sorted(folders, key=lambda x: x.lower()):
+                self._lora_filter_combo.addItem(folder_icon, folder)
+        self._add_lora_button.setEnabled(root.files.loras.rowCount() > 0)
+
+    def _add_lora_to_style(self):
+        """Add a LoRA from available files to the current style."""
+        if root.files.loras.rowCount() > 0:
+            # Just add first available LoRA for now - user can change it in Generation tab
+            lora_file = root.files.loras.data(root.files.loras.index(0, 0))
+            if lora_file:
+                # Create a new list to trigger the changed signal
+                new_loras = self.current_style.loras.copy()
+                new_loras.append({"name": lora_file, "strength": 1.0, "enabled": True})
+                self.current_style.loras = new_loras
+                self.current_style.save()
+
+    def _apply_lora_filter(self):
+        """Apply the LoRA filter to the global LoRA filter."""
+        # Get the selected filter text
+        filter_text = self._lora_filter_combo.currentText()
+        filter_prefix = filter_text if filter_text != "All" else ""
+
+        # Update the global LoRA filter
+        self._loras_filter.name_prefix = filter_prefix
+
+    def _upload_lora(self):
+        """Upload a LoRA file from the local filesystem."""
+        filepath = QFileDialog.getOpenFileName(
+            self, _("Select LoRA file"), None, "LoRA files (*.safetensors)"
+        )
+        if filepath[0]:
+            path = Path(filepath[0])
+            if client := root.connection.client_if_connected:
+                max_size = client.features.max_upload_size
+                if max_size and path.stat().st_size > max_size:
+                    _show_file_too_large_warning(max_size, self)
+                    return
+            file = File.local(path, FileFormat.lora, compute_hash=True)
+            root.files.loras.add(file)
 
     def _toggle_preferred_resolution(self, checked: bool):
         if checked and self._resolution_spin.value == 0:

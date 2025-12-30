@@ -14,7 +14,7 @@ from ..properties import Binding, Bind, bind, bind_combo, bind_toggle
 from ..image import Bounds, Extent, Image
 from ..jobs import Job, JobQueue, JobState, JobKind, JobParams
 from ..model import Model, InpaintContext, RootRegion, ProgressKind, Workspace
-from ..style import Styles
+from ..style import Styles, StyleSettings
 from ..settings import settings
 from ..root import root
 from ..workflow import InpaintMode, FillMode
@@ -24,7 +24,6 @@ from ..util import ensure, flatten, sequence_equal
 from .widget import LayerCountWidget, WorkspaceSelectWidget, StyleSelectWidget, StrengthWidget
 from .widget import GenerateButton, QueueButton, ErrorBox, create_wide_tool_button
 from .region import RegionPromptWidget
-from .quick_lora import QuickLoraList
 from . import actions, theme
 
 
@@ -739,9 +738,16 @@ class GenerationWidget(QWidget):
         self.custom_inpaint = CustomInpaintWidget(self)
         layout.addWidget(self.custom_inpaint)
 
-        self.lora_list = QuickLoraList(self)
-        self.lora_list.value_changed.connect(self._update_loras)
-        layout.addWidget(self.lora_list)
+        from .style import LoraItem, get_shared_lora_filter
+
+        # Simple LoRA selector list (just the items, no header/buttons)
+        self._lora_items: list[LoraItem] = []
+        self._loras_filter = get_shared_lora_filter()
+        self._lora_layout = QVBoxLayout()
+        self._lora_layout.setContentsMargins(0, 0, 0, 0)
+        self._lora_container = QWidget(self)
+        self._lora_container.setLayout(self._lora_layout)
+        layout.addWidget(self._lora_container)
 
         self.generate_button = GenerateButton(JobKind.diffusion, self)
 
@@ -963,14 +969,47 @@ class GenerationWidget(QWidget):
     def add_control(self):
         self.model.active_regions.add_control()
 
-    def _update_lora_widget(self):
-        """Update the LoRA widget when the style changes."""
-        if self.model and self.model.style:
-            self.lora_list.set_style(self.model.style)
+    def _add_lora_item(self, lora_data: dict | None = None):
+        """Add a new LoRA selector item."""
+        from .style import LoraItem
 
-    def _update_loras(self):
-        """Save LoRA changes from the widget back to the style."""
-        self.lora_list.update_style()
+        item = LoraItem(self._loras_filter, parent=self._lora_container)
+        item.changed.connect(self._on_lora_changed)
+        item.removed.connect(self._remove_lora_item)
+        if lora_data:
+            item.value = lora_data
+        self._lora_items.append(item)
+        self._lora_layout.addWidget(item)
+
+    def _remove_lora_item(self, item: QWidget):
+        """Remove a LoRA selector item."""
+        if item in self._lora_items:
+            self._lora_items.remove(item)
+            self._lora_layout.removeWidget(item)
+            item.deleteLater()
+            self._on_lora_changed()
+
+    def _on_lora_changed(self):
+        """Save LoRA changes when any item changes."""
+        if self.model and self.model.style:
+            self.model.style.loras = [item.value for item in self._lora_items]
+            self.model.style.save()
+
+    def _update_lora_widget(self):
+        """Update the LoRA items when the style changes."""
+        if not self.model or not self.model.style:
+            return
+
+        # Clear existing items
+        for item in self._lora_items:
+            self._lora_layout.removeWidget(item)
+            item.deleteLater()
+        self._lora_items.clear()
+
+        # Add items from style
+        if hasattr(self.model.style, "loras") and self.model.style.loras:
+            for lora_data in self.model.style.loras:
+                self._add_lora_item(lora_data)
 
     def update_generate_options(self):
         if not self.model.has_document:

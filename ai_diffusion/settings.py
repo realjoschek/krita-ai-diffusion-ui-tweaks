@@ -346,13 +346,6 @@ class Settings(QObject):
     show_builtin_styles: bool
     _show_builtin_styles = Setting(_("Show pre-installed styles"), True)
 
-    quick_lora_count: int
-    _quick_lora_count = Setting(
-        _("Quick LoRA Count"),
-        3,
-        _("Number of LoRA selectors to display in the Generation tab for quick access"),
-    )
-
     history_size: int
     _history_size = Setting(
         _("Active History Size"),

@@ -15,7 +15,7 @@ This fork includes several tweaks that save me some clicks here and there.
 ## Other Tweaks
 
 *   **Upscaling Noise Injection**: Added an option in the Upscale workspace to inject random noise into the image before running the upscale model. This can help fix some blurryness with some upscales.
-*   **SeedVR2 Upscaling**: High-quality upscaling using SeedVR2.
+
 ---
 
 <h1><img width="64px" src="ai_diffusion/icons/logo-128.png"> Generative AI <i>for Krita</i></h1>

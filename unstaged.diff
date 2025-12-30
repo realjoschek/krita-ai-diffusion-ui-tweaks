@@ -1,0 +1,413 @@
+diff --git a/ai_diffusion/api.py b/ai_diffusion/api.py
+index b191338..baf0055 100644
+--- a/ai_diffusion/api.py
++++ b/ai_diffusion/api.py
+@@ -154,6 +154,16 @@ class InpaintParams:
+ class UpscaleInput:
+     model: str = ""  # if empty do tiled refine without upscale model
+     tile_overlap: int = -1
++    # SeedVR2 parameters
++    is_seedvr2: bool = False
++    dit_model: str = ""
++    vae_model: str = ""
++    encode_tiled: bool = False
++    encode_tile_size: int = 1024
++    encode_tile_overlap: int = 128
++    decode_tiled: bool = False
++    decode_tile_size: int = 1024
++    decode_tile_overlap: int = 128
+ 
+ 
+ @dataclass
+diff --git a/ai_diffusion/client.py b/ai_diffusion/client.py
+index bf33e61..de600a9 100644
+--- a/ai_diffusion/client.py
++++ b/ai_diffusion/client.py
+@@ -196,6 +196,8 @@ class ClientModels:
+         self.vae: list[str] = []
+         self.loras: list[str] = []
+         self.upscalers: list[str] = []
++        self.dit_models: list[str] = []
++        self.vae_models: list[str] = []
+         self.node_inputs = ComfyObjectInfo({})
+         self.resources: dict[str, str | None] = {}
+ 
+@@ -208,6 +210,8 @@ class ClientModels:
+         models.vae = data.get("vae", [])
+         models.loras = data.get("loras", [])
+         models.upscalers = data.get("upscalers", [])
++        models.dit_models = data.get("dit_models", [])
++        models.vae_models = data.get("vae_models", [])
+         models.resources = data.get("resources", {})
+         return models
+ 
+diff --git a/ai_diffusion/comfy_client.py b/ai_diffusion/comfy_client.py
+index fb472db..139d21a 100644
+--- a/ai_diffusion/comfy_client.py
++++ b/ai_diffusion/comfy_client.py
+@@ -197,6 +197,9 @@ class ComfyClient(Client):
+         inpaint_models = nodes.options("INPAINT_LoadInpaintModel", "model_name")
+         available_resources.update(_find_inpaint_models(inpaint_models))
+ 
++        models.dit_models = nodes.options("SeedVR2LoadDiTModel", "model")
++        models.vae_models = nodes.options("SeedVR2LoadVAEModel", "model")
++
+         loras = nodes.options("LoraLoader", "lora_name")
+         available_resources.update(_find_loras(loras))
+ 
+diff --git a/ai_diffusion/comfy_workflow.py b/ai_diffusion/comfy_workflow.py
+index 6254b8b..3f1fce7 100644
+--- a/ai_diffusion/comfy_workflow.py
++++ b/ai_diffusion/comfy_workflow.py
+@@ -523,6 +523,15 @@ class ComfyWorkflow:
+     def load_style_model(self, model_name: str):
+         return self.add_cached("StyleModelLoader", 1, style_model_name=model_name)
+ 
++    def load_seedvr2_dit(self, model: str, device: str):
++        return self.add_cached("SeedVR2LoadDiTModel", 1, model=model, device=device)
++
++    def load_seedvr2_vae(self, model: str, device: str, **kwargs):
++        return self.add_cached("SeedVR2LoadVAEModel", 1, model=model, device=device, **kwargs)
++
++    def seedvr2_upscaler(self, image: Output, dit: Output, vae: Output, **kwargs):
++        return self.add("SeedVR2VideoUpscaler", 1, image=image, dit=dit, vae=vae, **kwargs)
++
+     def load_model_patch(self, model_name: str):
+         return self.add_cached("ModelPatchLoader", 1, name=model_name)
+ 
+diff --git a/ai_diffusion/model.py b/ai_diffusion/model.py
+index 61a6660..372dac8 100644
+--- a/ai_diffusion/model.py
++++ b/ai_diffusion/model.py
+@@ -1067,12 +1067,18 @@ class UpscaleParams:
+     seed: int
+ 
+ 
++class UpscaleMethod(Enum):
++    legacy = 0
++    seedvr2 = 1
++
++
+ class TileOverlapMode(Enum):
+     auto = 0
+     custom = 1
+ 
+ 
+ class UpscaleWorkspace(QObject, ObservableProperties):
++    method = Property(UpscaleMethod.legacy, persist=True)
+     upscaler = Property("", persist=True)
+     factor = Property(2.0, persist=True, setter="_set_factor")
+     use_diffusion = Property(True, persist=True)
+@@ -1083,8 +1089,18 @@ class UpscaleWorkspace(QObject, ObservableProperties):
+     use_prompt = Property(False, persist=True)
+     inject_noise = Property(False, persist=True)
+     noise_strength = Property(0.1, persist=True)
++    # SeedVR2
++    dit_model = Property("", persist=True)
++    vae_model = Property("", persist=True)
++    encode_tiled = Property(False, persist=True)
++    encode_tile_size = Property(1024, persist=True)
++    encode_tile_overlap = Property(128, persist=True)
++    decode_tiled = Property(False, persist=True)
++    decode_tile_size = Property(1024, persist=True)
++    decode_tile_overlap = Property(128, persist=True)
+     can_generate = Property(True)
+ 
++    method_changed = pyqtSignal(UpscaleMethod)
+     upscaler_changed = pyqtSignal(str)
+     factor_changed = pyqtSignal(float)
+     use_diffusion_changed = pyqtSignal(bool)
+@@ -1095,6 +1111,14 @@ class UpscaleWorkspace(QObject, ObservableProperties):
+     use_prompt_changed = pyqtSignal(bool)
+     inject_noise_changed = pyqtSignal(bool)
+     noise_strength_changed = pyqtSignal(int)
++    dit_model_changed = pyqtSignal(str)
++    vae_model_changed = pyqtSignal(str)
++    encode_tiled_changed = pyqtSignal(bool)
++    encode_tile_size_changed = pyqtSignal(int)
++    encode_tile_overlap_changed = pyqtSignal(int)
++    decode_tiled_changed = pyqtSignal(bool)
++    decode_tile_size_changed = pyqtSignal(int)
++    decode_tile_overlap_changed = pyqtSignal(int)
+     target_extent_changed = pyqtSignal(Extent)
+     can_generate_changed = pyqtSignal(bool)
+     modified = pyqtSignal(QObject, str)
+@@ -1112,6 +1136,10 @@ class UpscaleWorkspace(QObject, ObservableProperties):
+         if client := model._connection.client_if_connected:
+             if self.upscaler not in client.models.upscalers:
+                 self.upscaler = client.models.default_upscaler
++            if self.dit_model == "" and len(client.models.dit_models) > 0:
++                self.dit_model = client.models.dit_models[0]
++            if self.vae_model == "" and len(client.models.vae_models) > 0:
++                self.vae_model = client.models.vae_models[0]
+ 
+     def set_in_progress(self, in_progress: bool):
+         self._in_progress = in_progress
+@@ -1135,8 +1163,22 @@ class UpscaleWorkspace(QObject, ObservableProperties):
+     def params(self):
+         model = ensure(self._model())
+         overlap = self.tile_overlap if self.tile_overlap_mode is TileOverlapMode.custom else -1
++        upscale_input = UpscaleInput(
++            model=self.upscaler,
++            tile_overlap=overlap,
++            is_seedvr2=self.method is UpscaleMethod.seedvr2,
++            dit_model=self.dit_model,
++            vae_model=self.vae_model,
++            min_resolution=0,  # removed
++            encode_tiled=self.encode_tiled,
++            encode_tile_size=self.encode_tile_size,
++            encode_tile_overlap=self.encode_tile_overlap,
++            decode_tiled=self.decode_tiled,
++            decode_tile_size=self.decode_tile_size,
++            decode_tile_overlap=self.decode_tile_overlap,
++        )
+         return UpscaleParams(
+-            upscale=UpscaleInput(self.upscaler, overlap),
++            upscale=upscale_input,
+             factor=self.factor,
+             use_diffusion=self.use_diffusion,
+             unblur_strength=self.unblur_strength,
+diff --git a/ai_diffusion/ui/generation.py b/ai_diffusion/ui/generation.py
+index 5f6e54a..075c617 100644
+--- a/ai_diffusion/ui/generation.py
++++ b/ai_diffusion/ui/generation.py
+@@ -383,8 +383,6 @@ class HistoryWidget(QListWidget):
+         min_height = min(4 * self._apply_button.height(), 2 * self._thumb_size)
+         if thumb.extent.height < min_height:
+             thumb = Image.crop(thumb, Bounds(0, 0, thumb.extent.width, min_height))
+-        if job.result_was_used(index):  # add tiny star icon to mark used results
+-            thumb.draw_image(self._applied_icon, offset=(thumb.extent.width - 28, 4))
+         if job.is_favorite(index):
+             thumb.draw_image(self._applied_icon, offset=(4, 4))
+         return thumb.to_icon()
+diff --git a/ai_diffusion/ui/upscale.py b/ai_diffusion/ui/upscale.py
+index 7de8083..f84aa54 100644
+--- a/ai_diffusion/ui/upscale.py
++++ b/ai_diffusion/ui/upscale.py
+@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
+ 
+ from ..properties import Binding, Bind, bind, bind_combo, bind_toggle
+ from ..resources import ControlMode, UpscalerName
+-from ..model import Model, TileOverlapMode
++from ..model import Model, TileOverlapMode, UpscaleMethod
+ from ..jobs import JobKind
+ from ..localization import translate as _
+ from ..root import root
+@@ -118,12 +118,69 @@ class UpscaleWidget(QWidget):
+         self.setLayout(layout)
+ 
+         self.workspace_select = WorkspaceSelectWidget(self)
++        self.method_select = QComboBox(self)
++        self.method_select.addItem(_("Legacy Upscaling"), UpscaleMethod.legacy)
++        self.method_select.addItem(_("SeedVR2 Upscaling"), UpscaleMethod.seedvr2)
++
+         self.model_select = QComboBox(self)
+         model_layout = QHBoxLayout()
+         model_layout.addWidget(self.workspace_select)
++        model_layout.addWidget(self.method_select)
+         model_layout.addWidget(self.model_select)
+         layout.addLayout(model_layout)
+ 
++        # SeedVR2 widgets
++        self.seedvr2_group = QWidget(self)
++        seedvr2_layout = QVBoxLayout(self.seedvr2_group)
++        seedvr2_layout.setContentsMargins(0, 0, 0, 0)
++
++        self.dit_model_select = QComboBox(self)
++        self.vae_model_select = QComboBox(self)
++        dit_layout = QHBoxLayout()
++        dit_layout.addWidget(QLabel(_("DiT Model"), self), 1)
++        dit_layout.addWidget(self.dit_model_select, 2)
++        vae_layout = QHBoxLayout()
++        vae_layout.addWidget(QLabel(_("VAE Model"), self), 1)
++        vae_layout.addWidget(self.vae_model_select, 2)
++
++        self.encode_tiled_check = QCheckBox(_("Encode Tiled"), self)
++        self.encode_tile_size_input = QSpinBox(self)
++        self.encode_tile_size_input.setRange(64, 4096)
++        self.encode_tile_size_input.setSingleStep(32)
++        self.encode_tile_overlap_input = QSpinBox(self)
++        self.encode_tile_overlap_input.setRange(0, 512)
++        self.encode_tile_overlap_input.setSingleStep(32)
++
++        self.decode_tiled_check = QCheckBox(_("Decode Tiled"), self)
++        self.decode_tile_size_input = QSpinBox(self)
++        self.decode_tile_size_input.setRange(64, 4096)
++        self.decode_tile_size_input.setSingleStep(32)
++        self.decode_tile_overlap_input = QSpinBox(self)
++        self.decode_tile_overlap_input.setRange(0, 512)
++        self.decode_tile_overlap_input.setSingleStep(32)
++
++        seedvr2_layout.addLayout(dit_layout)
++        seedvr2_layout.addLayout(vae_layout)
++
++        tiling_layout = QVBoxLayout()
++        enc_layout = QHBoxLayout()
++        enc_layout.addWidget(self.encode_tiled_check)
++        enc_layout.addWidget(QLabel(_("Size"), self))
++        enc_layout.addWidget(self.encode_tile_size_input)
++        enc_layout.addWidget(QLabel(_("Overlap"), self))
++        enc_layout.addWidget(self.encode_tile_overlap_input)
++
++        dec_layout = QHBoxLayout()
++        dec_layout.addWidget(self.decode_tiled_check)
++        dec_layout.addWidget(QLabel(_("Size"), self))
++        dec_layout.addWidget(self.decode_tile_size_input)
++        dec_layout.addWidget(QLabel(_("Overlap"), self))
++        dec_layout.addWidget(self.decode_tile_overlap_input)
++
++        seedvr2_layout.addLayout(enc_layout)
++        seedvr2_layout.addLayout(dec_layout)
++        layout.addWidget(self.seedvr2_group)
++
+         self.factor_widget = FactorWidget(self)
+         self.factor_widget.value_changed.connect(self._update_factor)
+         layout.addWidget(self.factor_widget)
+@@ -222,6 +279,7 @@ class UpscaleWidget(QWidget):
+             self._model = model
+             self._model_bindings = [
+                 bind(model, "workspace", self.workspace_select, "value", Bind.one_way),
++                bind_combo(model.upscale, "method", self.method_select),
+                 bind_combo(model.upscale, "upscaler", self.model_select),
+                 bind(model.upscale, "factor", self.factor_widget, "value"),
+                 bind_toggle(model.upscale, "inject_noise", self.noise_checkbox),
+@@ -233,8 +291,17 @@ class UpscaleWidget(QWidget):
+                 bind_combo(model.upscale, "tile_overlap_mode", self.overlap_custom_combo),
+                 bind(model.upscale, "tile_overlap", self.overlap_input, "value"),
+                 bind_toggle(model.upscale, "use_prompt", self.use_prompt_switch),
++                bind_combo(model.upscale, "dit_model", self.dit_model_select),
++                bind_combo(model.upscale, "vae_model", self.vae_model_select),
++                bind_toggle(model.upscale, "encode_tiled", self.encode_tiled_check),
++                bind(model.upscale, "encode_tile_size", self.encode_tile_size_input, "value"),
++                bind(model.upscale, "encode_tile_overlap", self.encode_tile_overlap_input, "value"),
++                bind_toggle(model.upscale, "decode_tiled", self.decode_tiled_check),
++                bind(model.upscale, "decode_tile_size", self.decode_tile_size_input, "value"),
++                bind(model.upscale, "decode_tile_overlap", self.decode_tile_overlap_input, "value"),
+                 bind(model.upscale, "can_generate", self.upscale_button, "enabled", Bind.one_way),
+                 bind(model, "error", self.error_box, "error", Bind.one_way),
++                model.upscale.method_changed.connect(self._update_method),
+                 model.upscale.tile_overlap_mode_changed.connect(self._update_overlap),
+                 model.upscale.use_prompt_changed.connect(self._update_prompt),
+                 model.regions.modified.connect(self._update_prompt),
+@@ -250,6 +317,7 @@ class UpscaleWidget(QWidget):
+             self._update_prompt()
+             self._update_style()
+             self._update_overlap()
++            self._update_method()
+             self.update_progress()
+ 
+     def update_models(self):
+@@ -276,12 +344,34 @@ class UpscaleWidget(QWidget):
+                 selected = self.model_select.findData(self.model.upscale.upscaler)
+                 self.model_select.setCurrentIndex(max(selected, 0))
+ 
++            with SignalBlocker(self.dit_model_select):
++                self.dit_model_select.clear()
++                for file in client.models.dit_models:
++                    self.dit_model_select.addItem(file, file)
++                selected = self.dit_model_select.findData(self.model.upscale.dit_model)
++                self.dit_model_select.setCurrentIndex(max(selected, 0))
++
++            with SignalBlocker(self.vae_model_select):
++                self.vae_model_select.clear()
++                for file in client.models.vae_models:
++                    self.vae_model_select.addItem(file, file)
++                selected = self.vae_model_select.findData(self.model.upscale.vae_model)
++                self.vae_model_select.setCurrentIndex(max(selected, 0))
++
+     def update_progress(self):
+         self.progress_bar.setValue(int(self.model.progress * 100))
+ 
+     def upscale(self):
+         self.model.upscale_image()
+ 
++    def _update_method(self):
++        is_seedvr2 = self.model.upscale.method is UpscaleMethod.seedvr2
++        self.model_select.setVisible(not is_seedvr2)
++        self.noise_checkbox.setVisible(not is_seedvr2)
++        self.noise_slider.setVisible(not is_seedvr2 and self.model.upscale.inject_noise)
++        self.refinement_checkbox.setVisible(not is_seedvr2)
++        self.seedvr2_group.setVisible(is_seedvr2)
++
+     def _update_overlap(self):
+         self.overlap_input.setEnabled(
+             self.model.upscale.tile_overlap_mode is TileOverlapMode.custom
+diff --git a/ai_diffusion/workflow.py b/ai_diffusion/workflow.py
+index a046c4a..e7a4218 100644
+--- a/ai_diffusion/workflow.py
++++ b/ai_diffusion/workflow.py
+@@ -1324,6 +1324,55 @@ def upscale_tiled(
+     return w
+ 
+ 
++def upscale_seedvr2(
++    w: ComfyWorkflow,
++    image: Image,
++    extent: ExtentInput,
++    upscale: UpscaleInput,
++):
++    # Determine the target resolution from the extent (controlled by scale slider)
++    # This matches how legacy handles final size.
++    target_res = min(extent.target.width, extent.target.height)
++    target_res = (target_res // 2) * 2
++
++    # Scale the input image to match the target resolution before processing
++    current_min_side = min(image.width, image.height)
++    if current_min_side != target_res:
++        scale_factor = target_res / current_min_side
++        new_extent = image.extent * scale_factor
++        new_extent = Extent((new_extent.width // 2) * 2, (new_extent.height // 2) * 2)
++        image = Image.scale(image, new_extent)
++
++    img = w.load_image(image)
++    dit = w.load_seedvr2_dit(upscale.dit_model, "cuda")
++    vae = w.load_seedvr2_vae(
++        upscale.vae_model,
++        "cuda",
++        encode_tiled=upscale.encode_tiled,
++        encode_tile_size=upscale.encode_tile_size,
++        encode_tile_overlap=upscale.encode_tile_overlap,
++        decode_tiled=upscale.decode_tiled,
++        decode_tile_size=upscale.decode_tile_size,
++        decode_tile_overlap=upscale.decode_tile_overlap,
++    )
++
++    out = w.seedvr2_upscaler(
++        img,
++        dit,
++        vae,
++        seed=generate_seed(),
++        resolution=target_res,
++        batch_size=1,
++        color_correction="lab",
++    )
++    # Ensure final output size matches target exactly
++    if extent.target != extent.input:
++        out = w.scale_image(out, extent.target)
++
++    w.send_image(out)
++    return w
++
++
+ def expand_custom(
+     w: ComfyWorkflow,
+     input: CustomWorkflowInput,
+@@ -1667,6 +1716,9 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
+     elif i.kind is WorkflowKind.upscale_simple:
+         return upscale_simple(workflow, i.image, ensure(i.upscale).model, i.upscale_factor)
+     elif i.kind is WorkflowKind.upscale_tiled:
++        upscale_params = ensure(i.upscale)
++        if upscale_params.is_seedvr2:
++            return upscale_seedvr2(workflow, i.image, i.extent, upscale_params)
+         return upscale_tiled(
+             workflow,
+             i.image,
+@@ -1674,7 +1726,7 @@ def create(i: WorkflowInput, models: ClientModels, comfy_mode=ComfyRunMode.serve
+             ensure(i.models),
+             Conditioning.from_input(ensure(i.conditioning)),
+             ensure(i.sampling),
+-            ensure(i.upscale),
++            upscale_params,
+             misc,
+             models.for_arch(ensure(i.models).version),
+         )

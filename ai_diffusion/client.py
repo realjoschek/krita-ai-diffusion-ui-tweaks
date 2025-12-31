@@ -8,7 +8,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from .api import WorkflowInput
 from .comfy_workflow import ComfyObjectInfo
-from .image import ImageCollection
+from .image import ImageCollection, Point
 from .properties import Property, ObservableProperties
 from .files import FileLibrary, FileFormat
 from .style import Style
@@ -40,7 +40,17 @@ class TextOutput(NamedTuple):
     mime: str
 
 
-class ResizeCommand(NamedTuple):
+class OutputBatchMode(Enum):
+    default = 0
+    images = 1
+    animation = 2
+    layers = 3
+
+
+class JobInfoOutput(NamedTuple):
+    name: str = ""
+    offset: Point = Point(0, 0)
+    batch_mode: OutputBatchMode = OutputBatchMode.default
     resize_canvas: bool = False
 
 
@@ -49,7 +59,7 @@ class SharedWorkflow(NamedTuple):
     workflow: dict
 
 
-ClientOutput = dict | SharedWorkflow | TextOutput | ResizeCommand
+ClientOutput = dict | SharedWorkflow | TextOutput | JobInfoOutput
 
 
 class ClientMessage(NamedTuple):

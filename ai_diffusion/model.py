@@ -16,22 +16,16 @@ from PyQt5.QtGui import QPainter, QColor, QBrush
 
 from . import eventloop, workflow, util
 from .api import ConditioningInput, ControlInput, WorkflowKind, WorkflowInput, SamplingInput
-from .api import InpaintMode, InpaintParams, FillMode, ImageInput, CustomWorkflowInput, UpscaleInput
+from .api import FillMode, ImageInput, CustomWorkflowInput, UpscaleInput
+from .api import InpaintMode, InpaintContext, InpaintParams
 from .localization import translate as _
 from .util import clamp, ensure, trim_text, client_logger as log
 from .settings import ApplyBehavior, ApplyRegionBehavior, GenerationFinishedAction, ImageFileFormat
 from .settings import settings
 from .network import NetworkError
 from .image import Extent, Image, Mask, Bounds, DummyImage
-from .client import (
-    Client,
-    ClientMessage,
-    ClientEvent,
-    ClientOutput,
-    is_style_supported,
-    ResizeCommand,
-)
-from .client import filter_supported_styles, resolve_arch
+from .client import Client, ClientMessage, ClientEvent, ClientOutput
+from .client import is_style_supported, filter_supported_styles, resolve_arch
 from .custom_workflow import CustomWorkspace, WorkflowCollection, CustomGenerationMode
 from .document import Document, KritaDocument
 from .layer import Layer, LayerType, RestoreActiveLayer
@@ -538,23 +532,28 @@ class Model(QObject, ObservableProperties):
 
         try:
             wf = ensure(self.custom.graph)
-            bounds = Bounds(0, 0, *self._doc.extent)
-            img_input = ImageInput.from_extent(bounds.extent)
-            img_input.initial_image = self._get_current_image(bounds)
             is_live = self.custom.mode is CustomGenerationMode.live
             is_anim = self.custom.mode is CustomGenerationMode.animation
             seed = self.seed if is_live or self.fixed_seed else workflow.generate_seed()
+            canvas_bounds = Bounds(0, 0, *self._doc.extent)
+            bounds = canvas_bounds
+            mask = None
 
-            if next(wf.find(type="ETN_KritaSelection"), None):
-                mask, _ = self._doc.create_mask_from_selection()
-                if mask:
-                    img_input.hires_mask = mask.to_image(bounds.extent)
+            if selection_node := next(wf.find(type="ETN_KritaSelection"), None):
+                mods = get_selection_modifiers(InpaintMode.fill, self.strength, is_live)
+                mask, select_bounds = self._doc.create_mask_from_selection(mods.padding, 8, 256)
+                mask, bounds = self.custom.prepare_mask(selection_node, mask, select_bounds, bounds)
 
-            params = self.custom.collect_parameters(self.layers, bounds, is_anim)
+            img_input = ImageInput.from_extent(bounds.extent)
+            img_input.initial_image = self._get_current_image(bounds)
+            img_input.hires_mask = mask.to_image(bounds.extent) if mask else None
+
+            params = self.custom.collect_parameters(self.layers, canvas_bounds, is_anim)
             input = WorkflowInput(
                 WorkflowKind.custom,
                 img_input,
                 sampling=SamplingInput("custom", "custom", 1, 1000, seed=seed),
+                inpaint=InpaintParams(InpaintMode.fill, bounds),
                 custom_workflow=CustomWorkflowInput(wf.root, params),
             )
             job_params = JobParams(bounds, self.custom.job_name, metadata=self.custom.params)
@@ -656,10 +655,7 @@ class Model(QObject, ObservableProperties):
             self.progress_kind = ProgressKind.upload
             self.progress = message.progress
         elif message.event is ClientEvent.output:
-            if isinstance(message.result, ResizeCommand):
-                self._apply_resize_command(message.result, job)
-            else:
-                self.custom.show_output(message.result)
+            self.custom.handle_output(job, message.result)
         elif message.event is ClientEvent.finished:
             if message.error:  # successful jobs may have encountered some warnings
                 self.report_error(Error.from_string(message.error, ErrorKind.warning))
@@ -699,9 +695,6 @@ class Model(QObject, ObservableProperties):
             self.jobs.notify_cancelled(job)
             self.progress = 0
 
-    def _apply_resize_command(self, cmd: ResizeCommand, job: Job):
-        job.params.resize_canvas = cmd.resize_canvas
-
     def update_preview(self):
         if selection := self.jobs.selection:
             self.show_preview(selection[0].job, selection[0].image)
@@ -718,7 +711,7 @@ class Model(QObject, ObservableProperties):
         image = job.results[index]
         bounds = job.params.bounds
         if image.extent != bounds.extent:
-            image = Image.crop(image, Bounds(0, 0, *bounds.extent))
+            image = Image.crop(image, Bounds(0, 0, *Extent.min(bounds.extent, image.extent)))
         if self._layer and self._layer.was_removed:
             self._layer = None  # layer was removed by user
         if self._layer is not None:
@@ -1026,13 +1019,6 @@ class Model(QObject, ObservableProperties):
                 if is_style_supported(style, self._connection.client_if_connected):
                     return style
         return None
-
-
-class InpaintContext(Enum):
-    automatic = 0
-    mask_bounds = 1
-    entire_image = 2
-    layer_bounds = 3
 
 
 class CustomInpaint(QObject, ObservableProperties):

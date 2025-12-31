@@ -14,7 +14,7 @@ from ..properties import Binding, Bind, bind, bind_combo, bind_toggle
 from ..image import Bounds, Extent, Image
 from ..jobs import Job, JobQueue, JobState, JobKind, JobParams
 from ..model import Model, InpaintContext, RootRegion, ProgressKind, Workspace
-from ..style import Styles, StyleSettings
+from ..style import Styles
 from ..settings import settings
 from ..root import root
 from ..workflow import InpaintMode, FillMode

@@ -162,7 +162,6 @@ class UpscaleWidget(QWidget):
         seedvr2_layout.addLayout(dit_layout)
         seedvr2_layout.addLayout(vae_layout)
 
-        tiling_layout = QVBoxLayout()
         enc_layout = QHBoxLayout()
         enc_layout.addWidget(self.encode_tiled_check)
         enc_layout.addWidget(QLabel(_("Size"), self))

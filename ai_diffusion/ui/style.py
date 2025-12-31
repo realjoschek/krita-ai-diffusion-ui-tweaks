@@ -3,29 +3,6 @@ from __future__ import annotations
 from typing import Optional, cast
 from pathlib import Path
 
-# Shared LoRA filter instance
-_shared_lora_filter = None
-
-
-def get_shared_lora_filter():
-    """Get the shared LoRA filter instance used across Settings and Generation tabs."""
-    global _shared_lora_filter
-    if _shared_lora_filter is None:
-        try:
-            from ..files import FileFilter
-            from ..root import root
-
-            if hasattr(root, "files") and hasattr(root.files, "loras"):
-                _shared_lora_filter = FileFilter(root.files.loras)
-                _shared_lora_filter.available_only = True
-            else:
-                # Fallback: create later when root is ready
-                return None
-        except:
-            return None
-    return _shared_lora_filter
-
-
 from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
@@ -61,6 +38,26 @@ from .widget import create_framed_label
 from .theme import SignalBlocker, add_header, icon
 from .switch import SwitchWidget
 from . import theme
+
+
+# Shared LoRA filter instance
+_shared_lora_filter = None
+
+
+def get_shared_lora_filter():
+    """Get the shared LoRA filter instance used across Settings and Generation tabs."""
+    global _shared_lora_filter
+    if _shared_lora_filter is None:
+        try:
+            if hasattr(root, "files") and hasattr(root.files, "loras"):
+                _shared_lora_filter = FileFilter(root.files.loras)
+                _shared_lora_filter.available_only = True
+            else:
+                # Fallback: create later when root is ready
+                return None
+        except Exception:
+            return None
+    return _shared_lora_filter
 
 
 class LoraItem(QWidget):

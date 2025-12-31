@@ -14,7 +14,6 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from ..style import Style
 from ..files import FileFilter
 from ..root import root
-from ..settings import settings
 from .switch import SwitchWidget
 from .theme import SignalBlocker
 from .style import LoraList

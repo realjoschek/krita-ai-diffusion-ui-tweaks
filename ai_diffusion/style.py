@@ -94,6 +94,12 @@ class StyleSettings:
         _("Select an alternative style to use for for instruction-based editing"),
     )
 
+    lora_filter = Setting(
+        _("LoRA Filter"),
+        "All",
+        _("Filter LoRAs by folder in the Generation tab"),
+    )
+
     sampler = Setting(_("Sampler"), "Default - DPM++ 2M", _("The sampling strategy and scheduler"))
 
     sampler_steps = Setting(
@@ -129,6 +135,7 @@ class Style(QObject):
     self_attention_guidance: bool = StyleSettings.self_attention_guidance.default
     preferred_resolution: int = StyleSettings.preferred_resolution.default
     linked_edit_style: str = StyleSettings.linked_edit_style.default
+    lora_filter: str = StyleSettings.lora_filter.default
     sampler: str = StyleSettings.sampler.default
     sampler_steps: int = StyleSettings.sampler_steps.default
     cfg_scale: float = StyleSettings.cfg_scale.default

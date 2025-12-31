@@ -11,11 +11,18 @@ def get_shared_lora_filter():
     """Get the shared LoRA filter instance used across Settings and Generation tabs."""
     global _shared_lora_filter
     if _shared_lora_filter is None:
-        from ..files import FileFilter
-        from ..root import root
+        try:
+            from ..files import FileFilter
+            from ..root import root
 
-        _shared_lora_filter = FileFilter(root.files.loras)
-        _shared_lora_filter.available_only = True
+            if hasattr(root, "files") and hasattr(root.files, "loras"):
+                _shared_lora_filter = FileFilter(root.files.loras)
+                _shared_lora_filter.available_only = True
+            else:
+                # Fallback: create later when root is ready
+                return None
+        except:
+            return None
     return _shared_lora_filter
 
 
@@ -715,7 +722,11 @@ class StylePresets(SettingsTab):
         # LoRA file management (without showing the list)
         add_header(self._layout, StyleSettings.loras)
 
+        # Use shared filter if available, otherwise create a local one
         self._loras_filter = get_shared_lora_filter()
+        if self._loras_filter is None:
+            self._loras_filter = FileFilter(root.files.loras)
+            self._loras_filter.available_only = True
 
         self._add_lora_button = QPushButton(_("Add"), self)
         self._add_lora_button.setMinimumWidth(100)
@@ -964,6 +975,10 @@ class StylePresets(SettingsTab):
         # Update the global LoRA filter
         self._loras_filter.name_prefix = filter_prefix
 
+        # Save to style
+        self.current_style.lora_filter = filter_text
+        self.current_style.save()
+
     def _upload_lora(self):
         """Upload a LoRA file from the local filesystem."""
         filepath = QFileDialog.getOpenFileName(
@@ -1035,6 +1050,10 @@ class StylePresets(SettingsTab):
                 widget.value = getattr(style, name)
             self._default_sampler.read(style)
             self._live_sampler.read(style)
+            # Load and apply the saved filter
+            if hasattr(style, "lora_filter"):
+                self._lora_filter_combo.setCurrentText(style.lora_filter)
+                self._apply_lora_filter()
         self._show_builtin_info(style)
         self._read_checkpoint(style)
         self._enable_checkpoint_advanced()

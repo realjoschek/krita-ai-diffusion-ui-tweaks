@@ -739,10 +739,16 @@ class GenerationWidget(QWidget):
         layout.addWidget(self.custom_inpaint)
 
         from .style import LoraItem, get_shared_lora_filter
+        from ..files import FileFilter
 
         # Simple LoRA selector list (just the items, no header/buttons)
         self._lora_items: list[LoraItem] = []
+        self._updating_loras = False  # Flag to prevent saves during rebuild
+        # Use shared filter if available, otherwise create a local one
         self._loras_filter = get_shared_lora_filter()
+        if self._loras_filter is None:
+            self._loras_filter = FileFilter(root.files.loras)
+            self._loras_filter.available_only = True
         self._lora_layout = QVBoxLayout()
         self._lora_layout.setContentsMargins(0, 0, 0, 0)
         self._lora_container = QWidget(self)
@@ -991,14 +997,48 @@ class GenerationWidget(QWidget):
 
     def _on_lora_changed(self):
         """Save LoRA changes when any item changes."""
+        # Don't save while we're rebuilding the widget
+        if self._updating_loras:
+            return
+
         if self.model and self.model.style:
-            self.model.style.loras = [item.value for item in self._lora_items]
+            # Get current loras from widgets
+            current_loras = [item.value for item in self._lora_items]
+
+            # Don't save if we're in the middle of updating (items being cleared/recreated)
+            # This prevents saving an empty list during widget rebuild
+            if len(current_loras) == 0 and len(self.model.style.loras) > 0:
+                return  # Don't overwrite existing LoRAs with empty list
+
+            self.model.style.loras = current_loras
             self.model.style.save()
 
     def _update_lora_widget(self):
         """Update the LoRA items when the style changes."""
         if not self.model or not self.model.style:
             return
+
+        # Don't update if loras attribute doesn't exist yet (style still loading)
+        if not hasattr(self.model.style, "loras"):
+            return
+
+        # Get the LoRAs we need to display
+        style_loras = self.model.style.loras if self.model.style.loras else []
+
+        # Only update if the LoRAs have actually changed
+        current_loras = [item.value for item in self._lora_items if item.isVisible()]
+        if len(current_loras) == len(style_loras):
+            # Check if they're the same
+            if all(
+                c.get("name") == s.get("name")
+                and c.get("strength") == s.get("strength")
+                and c.get("enabled") == s.get("enabled")
+                for c, s in zip(current_loras, style_loras)
+            ):
+                return  # No changes, don't rebuild
+
+        # Set flag to prevent saves during rebuild
+        self._updating_loras = True
 
         # Clear existing items
         for item in self._lora_items:
@@ -1007,9 +1047,11 @@ class GenerationWidget(QWidget):
         self._lora_items.clear()
 
         # Add items from style
-        if hasattr(self.model.style, "loras") and self.model.style.loras:
-            for lora_data in self.model.style.loras:
-                self._add_lora_item(lora_data)
+        for lora_data in style_loras:
+            self._add_lora_item(lora_data)
+
+        # Clear flag after rebuild
+        self._updating_loras = False
 
     def update_generate_options(self):
         if not self.model.has_document:

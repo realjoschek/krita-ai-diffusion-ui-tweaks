@@ -48,4 +48,4 @@ git pull fork main
 
 ---
 
-## For Everythings else refer back to the original [Krita Ai Diffusion repo](https://github.com/Acly/krita-ai-diffusion)
+## For everything else refer back to the original [Krita Ai Diffusion repo](https://github.com/Acly/krita-ai-diffusion)

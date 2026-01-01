@@ -33,17 +33,20 @@ cd ~/.local/share/krita/pykrita/krita-ai-diffusion
 git remote add fork https://github.com/realjoschek/krita-ai-diffusion-ui-tweaks.git
 git fetch fork
 git checkout fork/main
+git submodule update --init --recursive
 
 # Windows (PowerShell)
 cd $env:APPDATA\krita\pykrita\krita-ai-diffusion
 git remote add fork https://github.com/realjoschek/krita-ai-diffusion-ui-tweaks.git
 git fetch fork
 git checkout fork/main
+git submodule update --init --recursive
 ```
 
 **Update to latest fork version:**
 ```bash
 git pull fork main
+git submodule update --init --recursive
 ```
 
 ---

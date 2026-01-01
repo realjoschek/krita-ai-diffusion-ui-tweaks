@@ -749,8 +749,11 @@ class Model(QObject, ObservableProperties):
                 name = f"{prefix}{trim_text(params.name, 200)} ({params.seed})"
                 pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
                 layer = self.layers.create(name, image, bounds, above=pos)
-                mask = Mask.rectangle(layer.bounds)
-                self.layers.create_mask("Transparency Mask", mask.to_image(), layer.bounds, layer)
+                if settings.joschek_tweaks_transparency_mask:
+                    mask = Mask.rectangle(layer.bounds)
+                    self.layers.create_mask(
+                        "Transparency Mask", mask.to_image(), layer.bounds, layer
+                    )
         else:  # apply to regions
             with RestoreActiveLayer(self.layers) as restore:
                 active_id = Region.link_target(self.layers.active).id_string
@@ -825,8 +828,9 @@ class Model(QObject, ObservableProperties):
         layer = self.layers.create(
             name, region_image, region_bounds, parent=region_layer, above=insert_pos
         )
-        mask = Mask.rectangle(layer.bounds)
-        self.layers.create_mask("Transparency Mask", mask.to_image(), layer.bounds, layer)
+        if settings.joschek_tweaks_transparency_mask:
+            mask = Mask.rectangle(layer.bounds)
+            self.layers.create_mask("Transparency Mask", mask.to_image(), layer.bounds, layer)
         return layer
 
     def apply_generated_result(self, job_id: str, index: int):

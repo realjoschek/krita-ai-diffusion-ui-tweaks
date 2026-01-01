@@ -450,6 +450,13 @@ class Settings(QObject):
         _("Write latest ComfyUI prompt to the log folder for test & debug"),
     )
 
+    joschek_tweaks_transparency_mask: bool
+    _joschek_tweaks_transparency_mask = Setting(
+        _("Add Transparency Mask"),
+        True,
+        _("Automatically add a transparency mask when applying images to layers"),
+    )
+
     document_defaults: dict[str, Any]
     _document_defaults = Setting(_("Document Defaults"), {}, _("Recently used document settings"))
 

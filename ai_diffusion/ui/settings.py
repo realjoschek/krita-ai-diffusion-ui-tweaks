@@ -27,7 +27,7 @@ from PyQt5.QtGui import QDesktopServices, QGuiApplication, QCursor, QFontMetrics
 from ..client import Client, User, MissingResources
 from ..cloud_client import CloudClient
 from ..resources import Arch, ResourceId
-from ..settings import Settings, ServerMode, PerformancePreset, settings, ImageFileFormat
+from ..settings import Settings, Setting, ServerMode, PerformancePreset, settings, ImageFileFormat
 from ..server import Server, ServerState
 from ..style import Style
 from ..root import root
@@ -729,6 +729,13 @@ class InterfaceSettings(SettingsTab):
         self.add("save_image_format", ComboBoxSetting(S._save_image_format, parent=self))
         self.add("save_image_metadata", SwitchSetting(S._save_image_metadata, parent=self))
         self.add("debug_dump_workflow", SwitchSetting(S._debug_dump_workflow, parent=self))
+
+        self._layout.addSpacing(20)
+        add_header(self._layout, Setting(_("Joschek's tweaks"), ""))
+        self.add(
+            "joschek_tweaks_transparency_mask",
+            SwitchSetting(S._joschek_tweaks_transparency_mask, parent=self),
+        )
 
         self._widgets["save_image_format"].value_changed.connect(self._update_image_format_widgets)
 

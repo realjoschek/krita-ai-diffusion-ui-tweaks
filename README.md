@@ -25,7 +25,19 @@ Leave some feedback if you like.
 
 ## Installation
 
-If you'd like to test (or just use it) here are some quick quick install instructions:
+### Recommended Method (Release ZIP)
+The simplest way to install is to use the release package.
+
+1.  Download the latest **Release ZIP** from the [Releases page](../../releases).
+2.  Close Krita.
+3.  Go to your Krita resources folder (In Krita: `Settings` -> `Manage Resources` -> `Open Resource Folder`).
+4.  Open the `pykrita` folder.
+5.  **Delete** any existing `krita-ai-diffusion` folder (important!).
+6.  Extract the ZIP file here. You should end up with a new `krita-ai-diffusion` folder inside `pykrita`.
+7.  Start Krita.
+
+### Developer Method (Git)
+If you want to track the source code updates directly:
 
 ```bash
 # Linux

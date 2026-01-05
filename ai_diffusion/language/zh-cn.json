@@ -571,6 +571,27 @@
     "Jobs": "任务数",
     "Overwrite Workflow": null,
     "A workflow named '{name}' already exists. Do you want to overwrite it?": null,
-    "Layers": null
+    "Layers": null,
+    "Encode Tiled": null,
+    "Legacy Upscaling": null,
+    "LoRA Filter": null,
+    "SeedVR2 Upscaling": null,
+    "Overlap": null,
+    "Filter LoRAs by folder in the Generation tab": null,
+    "VAE Model": null,
+    "Are you sure you want to discard all generated images (except favorites)?": null,
+    "Add Transparency Mask": null,
+    "Inject Noise": null,
+    "Increment": null,
+    "DiT Model": null,
+    "Increment the fixed seed after each generation": null,
+    "Cancel all queued generations": null,
+    "Size": null,
+    "Automatically add a transparency mask when applying images to layers": null,
+    "Queue 10 individual generations with random seeds": null,
+    "Noise Strength": null,
+    "Joschek's tweaks": null,
+    "Clear History (Keep Favorites)": null,
+    "Decode Tiled": null
   }
 }

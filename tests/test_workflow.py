@@ -21,6 +21,7 @@ from ai_diffusion.client import Client, ClientEvent
 from ai_diffusion.style import Arch, Style
 from ai_diffusion.pose import Pose
 from ai_diffusion.workflow import detect_inpaint
+from ai_diffusion.util import ensure
 from . import config
 from .config import root_dir, test_dir, image_dir, result_dir, reference_dir, default_checkpoint
 from .conftest import CloudService
@@ -72,15 +73,27 @@ default_seed = 1234
 default_perf = PerformanceSettings(batch_size=1)
 
 
-def default_style(client: Client, sd_ver=Arch.sd15):
-    version_checkpoints = [c for c in client.models.checkpoints if sd_ver.matches(c)]
-    checkpoint = default_checkpoint[sd_ver]
+def default_style(client: Client, arch=Arch.sd15):
+    version_checkpoints = [
+        name for name, cp in client.models.checkpoints.items() if cp.arch is arch
+    ]
+    checkpoint = default_checkpoint[arch]
 
     style = Style(Path("default.json"))
     style.checkpoints = [checkpoint] + version_checkpoints
-    if sd_ver.is_flux_like:
+    if not arch.is_sdxl_like:
+        style.style_prompt = ""
+    if arch.is_flux_like:
         style.sampler = "Flux - Euler simple"
         style.cfg_scale = 3.5
+    if arch is Arch.zimage:
+        style.sampler = "Flux - Euler simple"
+        style.cfg_scale = 1.0
+        style.sampler_steps = 8
+    if arch.is_flux2:
+        style.sampler = "Flux 2 - Euler"
+        style.cfg_scale = 1.0
+        style.sampler_steps = 5
     return style
 
 
@@ -146,38 +159,47 @@ def run_and_save(
 
 def dump_workflow(work: WorkflowInput, filename: str, client: Client):
     flow = workflow.create(work, client.models)
-    flow.dump((result_dir / "workflows" / filename).with_suffix(".json"))
+    flow.embed_images().dump((result_dir / "workflows" / filename).with_suffix(".json"))
 
 
 def automatic_inpaint(
     image_extent: Extent,
     bounds: Bounds,
     sd_ver: Arch = Arch.sd15,
-    prompt: str = "",
-    control: list[ControlInput] = [],
+    cond: ConditioningInput = ConditioningInput(""),
 ):
     mode = workflow.detect_inpaint_mode(image_extent, bounds)
-    return detect_inpaint(mode, bounds, sd_ver, prompt, control, strength=1.0)
+    params = detect_inpaint(mode, bounds, sd_ver, cond, strength=1.0)
+    params.grow = max(25, int(bounds.width * 0.1))
+    params.feather = max(51, int(bounds.width * 0.2))
+    params.blend = 25
+    return params
 
 
 def test_inpaint_params():
     bounds = Bounds(0, 0, 100, 100)
+    no_cond = ConditioningInput("")
 
-    a = detect_inpaint(InpaintMode.fill, bounds, Arch.sd15, "", [], 1.0)
+    a = detect_inpaint(InpaintMode.fill, bounds, Arch.sd15, no_cond, 1.0)
     assert a.fill is FillMode.blur and a.use_inpaint_model and a.use_reference
 
-    b = detect_inpaint(InpaintMode.add_object, bounds, Arch.sd15, "", [], 1.0)
+    b = detect_inpaint(InpaintMode.add_object, bounds, Arch.sd15, no_cond, 1.0)
     assert b.fill is FillMode.neutral and not b.use_condition_mask
 
-    c = detect_inpaint(InpaintMode.replace_background, bounds, Arch.sdxl, "", [], 1.0)
+    c = detect_inpaint(InpaintMode.replace_background, bounds, Arch.sdxl, no_cond, 1.0)
     assert c.fill is FillMode.replace and c.use_inpaint_model and not c.use_reference
 
-    d = detect_inpaint(InpaintMode.add_object, bounds, Arch.sd15, "prompt", [], 1.0)
+    prompt = ConditioningInput("prompt")
+    d = detect_inpaint(InpaintMode.add_object, bounds, Arch.sd15, prompt, 1.0)
     assert d.use_condition_mask
 
-    control = [ControlInput(ControlMode.line_art, Image.create(Extent(4, 4)))]
-    e = detect_inpaint(InpaintMode.add_object, bounds, Arch.sd15, "prompt", control, 1.0)
+    prompt.control = [ControlInput(ControlMode.line_art, Image.create(Extent(4, 4)))]
+    e = detect_inpaint(InpaintMode.add_object, bounds, Arch.sd15, prompt, 1.0)
     assert not e.use_condition_mask
+
+    prompt.edit_reference = True
+    f = detect_inpaint(InpaintMode.fill, bounds, Arch.sd15, prompt, 1.0)
+    assert f.fill is FillMode.none
 
 
 def test_prepare_lora():
@@ -225,9 +247,31 @@ def test_prepare_lora():
     assert LoraInput("x/FRACTAL.safetensors", 0.55) in result.loras
 
 
+def test_prepare_negative():
+    files = FileLibrary(FileCollection(), FileCollection())
+    style = Style(Path("default.json"))
+    style.checkpoints = []
+    style.negative_prompt = "neg-beg {prompt} neg-end"
+    style.cfg_scale = 5.0
+    style.live_cfg_scale = 1.0
+    cond = ConditioningInput("positive prompt")
+    cond.negative = "piong"
+
+    result = workflow.prepare_prompts(cond, style, seed=1, arch=Arch.sd15, files=files)
+    assert result.conditioning.negative == "neg-beg piong neg-end"
+    assert result.metadata["negative_prompt"] == "piong"
+    assert result.metadata["negative_prompt_final"] == "neg-beg piong neg-end"
+
+    # CFG=1.0 -> empty negative prompt
+    live = workflow.prepare_prompts(cond, style, 1, Arch.sd15, files=files, is_live=True)
+    assert live.conditioning.negative == ""
+    assert live.metadata["negative_prompt"] == "piong"
+    assert live.metadata["negative_prompt_final"] == ""
+
+
 def test_prepare_wildcards():
     files = FileLibrary(FileCollection(), FileCollection())
-    mask = Mask.rectangle(Bounds(0, 0, 10, 10), feather=0).to_image()
+    mask = Mask.rectangle(Bounds(0, 0, 10, 10), Bounds(0, 0, 10, 10)).to_image()
     style = Style(Path("default.json"))
     style.checkpoints = []
     style.style_prompt = "style-beg {prompt} style-end"
@@ -264,7 +308,7 @@ def test_prepare_wildcards():
 @pytest.mark.parametrize("arch", [Arch.sd15, Arch.qwen_e_p])
 def test_prepare_prompt_layers(arch: Arch):
     files = FileLibrary(FileCollection(), FileCollection())
-    mask = Mask.rectangle(Bounds(0, 0, 10, 10), feather=0).to_image()
+    mask = Mask.rectangle(Bounds(0, 0, 10, 10), Bounds(0, 0, 10, 10)).to_image()
     style = Style(Path("default.json"))
     style.checkpoints = []
     cond = ConditioningInput("prompt <layer:layer1> for <layer:layer2>")
@@ -286,9 +330,38 @@ def test_prepare_prompt_layers(arch: Arch):
             result.metadata["prompt_final"]
             == f"prompt Picture 2 for Picture 3, {style.style_prompt}"
         )
-    assert result.layers == ["layer1", "layer2"]
-    assert result.region_layers[0] == ["layer3"]
-    assert result.region_layers[1] == []
+
+
+def test_prepare_prompt_instructions():
+    files = FileLibrary(FileCollection(), FileCollection())
+    style = Style(Path("default.json"))
+    style.checkpoints = []
+    cond = ConditioningInput("base prompt")
+    cond.control = [
+        ControlInput(ControlMode.style, Image.create(Extent(4, 4))),
+        ControlInput(ControlMode.pose, Image.create(Extent(4, 4))),
+    ]
+    cond.edit_reference = True
+
+    result = workflow.prepare_prompts(cond, style, seed=1, arch=Arch.flux2_4b, files=files)
+    assert result.conditioning is not None
+    expected_prompt = "Apply the style from image 2.\nMatch the pose in image 3.\n\nbase prompt"
+    assert result.conditioning.positive == expected_prompt
+
+
+def test_prepare_prompt_inpaint():
+    files = FileLibrary(FileCollection(), FileCollection())
+    style = Style(Path("default.json"))
+    style.checkpoints = []
+    cond = ConditioningInput("inpaint prompt")
+
+    result = workflow.prepare_prompts(
+        cond, style, 1, Arch.flux2_4b, InpaintMode.remove_object, files=files
+    )
+    assert result.conditioning is not None
+    expected_prompt = "Remove the object.\n\ninpaint prompt"
+    assert result.conditioning.positive == expected_prompt
+    assert result.conditioning.edit_reference
 
 
 @pytest.mark.parametrize("extent", [Extent(256, 256), Extent(800, 800), Extent(512, 1024)])
@@ -301,8 +374,12 @@ def test_generate(qtapp, client, extent: Extent):
 
 def test_inpaint(qtapp, client):
     image = Image.load(image_dir / "beach_768x512.webp")
-    mask = Mask.rectangle(Bounds(40, 120, 320, 200), feather=10)
+    mask = Mask.rectangle(Bounds(40, 40, 320, 200), Bounds(0, 80, 400, 280))
     cond = ConditioningInput("beach, the sea, cliffs, palm trees")
+    inpaint = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, cond, 1.0)
+    inpaint.feather = 32
+    inpaint.grow = 4 + inpaint.feather // 2
+    inpaint.blend = 21
     job = create(
         WorkflowKind.inpaint,
         client,
@@ -311,7 +388,7 @@ def test_inpaint(qtapp, client):
         style=default_style(client, Arch.sd15),
         cond=cond,
         perf=PerformanceSettings(batch_size=3),  # max 3 images@512x512 -> 2 images@768x512
-        inpaint=detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, cond.positive, [], 1.0),
+        inpaint=inpaint,
     )
 
     async def main():
@@ -321,16 +398,23 @@ def test_inpaint(qtapp, client):
         for i, result in enumerate(results):
             image.draw_image(result, mask.bounds.offset)
             image.save(result_dir / f"test_inpaint_{i}_{client_name}.png")
-            assert result.extent == Extent(320, 200)
+            assert result.extent == mask.bounds.extent
 
     qtapp.run(main())
 
 
-@pytest.mark.parametrize("sdver", [Arch.sd15, Arch.sdxl])
+@pytest.mark.parametrize("sdver", [Arch.sd15, Arch.sdxl, Arch.zimage, Arch.flux2_4b])
 def test_inpaint_upscale(qtapp, client, sdver):
+    if isinstance(client, CloudClient) and sdver is Arch.zimage:
+        pytest.skip("Skipping test for CloudClient with z-image model")
+
     image = Image.load(image_dir / "beach_1536x1024.webp")
-    mask = Mask.rectangle(Bounds(300, 200, 768, 512), feather=20)
+    mask = Mask.rectangle(Bounds(150, 150, 768, 512), Bounds(150, 50, 1068, 812))
     prompt = ConditioningInput("ship")
+    inpaint = detect_inpaint(InpaintMode.add_object, mask.bounds, sdver, prompt, 1.0)
+    inpaint.feather = 50
+    inpaint.grow = 4 + inpaint.feather // 2
+    inpaint.blend = 25
     job = create(
         WorkflowKind.inpaint,
         client,
@@ -338,16 +422,13 @@ def test_inpaint_upscale(qtapp, client, sdver):
         mask=mask,
         style=default_style(client, sdver),
         cond=prompt,
-        perf=PerformanceSettings(batch_size=3),  # 2 images for 1.5, 1 image for XL
-        inpaint=detect_inpaint(
-            InpaintMode.add_object, mask.bounds, sdver, prompt.positive, [], 1.0
-        ),
+        perf=PerformanceSettings(batch_size=3),
+        inpaint=inpaint,
     )
 
     async def main():
         dump_workflow(job, f"test_inpaint_upscale_{sdver.name}.json", client)
         results = await receive_images(client, job)
-        assert len(results) == 2 if sdver == Arch.sd15 else 1
         client_name = "local" if isinstance(client, ComfyClient) else "cloud"
         for i, result in enumerate(results):
             image.draw_image(result, mask.bounds.offset)
@@ -360,7 +441,7 @@ def test_inpaint_upscale(qtapp, client, sdver):
 def test_inpaint_odd_resolution(qtapp, client):
     image = Image.load(image_dir / "beach_768x512.webp")
     image = Image.scale(image, Extent(612, 513))
-    mask = Mask.rectangle(Bounds(0, 0, 200, 513))
+    mask = Mask.rectangle(Bounds(0, 0, 200, 513), Bounds(0, 0, 350, 513))
     job = create(
         WorkflowKind.inpaint,
         client,
@@ -382,9 +463,7 @@ def test_inpaint_area_conditioning(qtapp, client):
         canvas=image,
         mask=mask,
         cond=prompt,
-        inpaint=detect_inpaint(
-            InpaintMode.add_object, mask.bounds, Arch.sd15, prompt.positive, [], 1.0
-        ),
+        inpaint=detect_inpaint(InpaintMode.add_object, mask.bounds, Arch.sd15, prompt, 1.0),
     )
     run_and_save(qtapp, client, job, "test_inpaint_area_conditioning", image, mask)
 
@@ -392,18 +471,19 @@ def test_inpaint_area_conditioning(qtapp, client):
 def test_inpaint_remove_object(qtapp, client):
     image = Image.load(image_dir / "owls_inpaint.webp")
     mask = Mask.load(image_dir / "owls_mask_remove.webp")
+    cond = ConditioningInput("tree branch")
     job = create(
         WorkflowKind.inpaint,
         client,
         canvas=image,
         mask=mask,
-        cond=ConditioningInput("tree branch"),
-        inpaint=detect_inpaint(InpaintMode.remove_object, mask.bounds, Arch.sd15, "tree", [], 1.0),
+        cond=cond,
+        inpaint=detect_inpaint(InpaintMode.remove_object, mask.bounds, Arch.sd15, cond, 1.0),
     )
     run_and_save(qtapp, client, job, "test_inpaint_remove_object", image, mask)
 
 
-@pytest.mark.parametrize("setup", ["sd15", "sdxl", "flux", "flux_k"])
+@pytest.mark.parametrize("setup", ["sd15", "sdxl", "flux", "flux_k", "flux2"])
 def test_refine(qtapp, client, setup):
     if isinstance(client, CloudClient) and setup in ["flux", "flux_k"]:
         pytest.skip("Skipping test for CloudClient with flux models")
@@ -413,6 +493,7 @@ def test_refine(qtapp, client, setup):
         "sdxl": (Arch.sdxl, Extent(1111, 741), 0.65),
         "flux": (Arch.flux, Extent(1111, 741), 0.65),
         "flux_k": (Arch.flux_k, Extent(1111, 741), 1.0),
+        "flux2": (Arch.flux2_4b, Extent(1111, 741), 1.0),
     }[setup]
     image = Image.load(image_dir / "beach_1536x1024.webp")
     image = Image.scale(image, extent)
@@ -425,13 +506,15 @@ def test_refine(qtapp, client, setup):
         strength=strength,
         perf=PerformanceSettings(batch_size=1, max_pixel_count=2),
     )
+    if sdver.supports_edit:
+        ensure(job.conditioning).edit_reference = True
     result = run_and_save(qtapp, client, job, f"test_refine_{setup}")
     assert result.extent == extent
 
 
 @pytest.mark.parametrize("setup", ["sd15_0.4", "sd15_0.6", "sdxl_0.7", "flux_0.6"])
 def test_refine_region(qtapp, client, setup):
-    if isinstance(client, CloudClient) and setup in ["flux", "flux_k"]:
+    if isinstance(client, CloudClient) and setup == "flux_0.6":
         pytest.skip("Skipping test for CloudClient with flux models")
 
     sdver, strength = {
@@ -443,7 +526,7 @@ def test_refine_region(qtapp, client, setup):
     image = Image.load(image_dir / "lake_region.webp")
     mask = Mask.load(image_dir / "lake_region_mask.png")
     prompt = ConditioningInput("waterfall")
-    params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt.positive, [], strength)
+    params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt, strength)
     job = create(
         WorkflowKind.refine_region,
         client,
@@ -462,7 +545,7 @@ def test_differential_diffusion(qtapp, client):
     image = Image.scale(Image.load(image_dir / "beach_1536x1024.webp"), Extent(768, 512))
     mask = Mask.load(image_dir / "differential_diffusion_mask.webp")
     prompt = ConditioningInput("barren plain, volcanic wasteland, burned trees")
-    params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt.positive, [], 0.9)
+    params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt, 0.9)
     job = create(
         WorkflowKind.refine_region,
         client,
@@ -522,7 +605,7 @@ def test_regions_inpaint(qtapp, client, kind: WorkflowKind):
     prompt = region_prompt()
     prompt.regions = prompt.regions[:2] + prompt.regions[3:]
     prompt.regions[0].mask = Mask.load(image_dir / "region_mask_bg2.png").to_image()
-    params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt.positive, [], 1.0)
+    params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt, 1.0)
     strength = 0.7 if kind is WorkflowKind.refine_region else 1.0
     job = create(
         kind, client, canvas=image, mask=mask, cond=prompt, inpaint=params, strength=strength
@@ -608,14 +691,15 @@ def test_control_scribble(qtapp, client, op):
         crop_image = Image.crop(inpaint_image, mask.bounds)
         control[0].image = Image.crop(scribble_image, mask.bounds)
         crop_mask = Mask(Bounds(0, 0, 256, 512), mask.image)
-        params = params = automatic_inpaint(crop_image.extent, crop_mask.bounds)
+        params = automatic_inpaint(crop_image.extent, crop_mask.bounds)
+        params.grow = params.feather = 0
         args = dict(kind=kind, canvas=crop_image, mask=crop_mask, strength=0.7, inpaint=params)
     else:  # op == "inpaint_upscale":
         control[0].image = Image.scale(scribble_image, Extent(1024, 1024))
         inpaint_image = Image.scale(inpaint_image, Extent(1024, 1024))
         scaled_mask = Image.scale(Image(mask.image), Extent(512, 1024))
         mask = Mask(Bounds(512, 0, 512, 1024), scaled_mask._qimage)
-        params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, "owls", control, 1.0)
+        params = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt, 1.0)
         args = dict(kind=WorkflowKind.inpaint, canvas=inpaint_image, mask=mask, inpaint=params)
 
     job = create(client=client, cond=prompt, **args)
@@ -692,7 +776,7 @@ def test_ip_adapter_region(qtapp, client):
     control_img = Image.load(image_dir / "pegonia.webp")
     prompt = ConditioningInput("potted flowers")
     prompt.control = [ControlInput(ControlMode.reference, control_img, 0.7)]
-    inpaint = automatic_inpaint(image.extent, mask.bounds, Arch.sd15, prompt.positive)
+    inpaint = automatic_inpaint(image.extent, mask.bounds, Arch.sd15, prompt)
     job = create(
         WorkflowKind.refine_region,
         client,
@@ -797,27 +881,47 @@ def test_refine_live(qtapp, client, sdver):
     run_and_save(qtapp, client, job, f"test_refine_live_{sdver.name}")
 
 
-def test_edit(qtapp, local_client):
+@pytest.mark.parametrize("arch", [Arch.flux_k, Arch.flux2_4b])
+def test_edit(qtapp, client, arch):
+    if isinstance(client, CloudClient) and arch is Arch.flux_k:
+        pytest.skip("Flux Kontext not supported on Cloud")
     image = Image.load(image_dir / "flowers.webp")
-    style = default_style(local_client, Arch.flux_k)
+    style = default_style(client, arch)
     cond = ConditioningInput("turn the image into a minimalistic vector illustration")
-    job = create(WorkflowKind.refine, local_client, style=style, canvas=image, cond=cond)
-    run_and_save(qtapp, local_client, job, "test_edit")
+    cond.edit_reference = True
+    job = create(WorkflowKind.refine, client, style=style, canvas=image, cond=cond)
+    run_and_save(qtapp, client, job, f"test_edit_{arch.name}")
 
 
-def test_edit_selection(qtapp, local_client):
+@pytest.mark.parametrize("arch", [Arch.flux_k, Arch.flux2_4b])
+def test_edit_selection(qtapp, client, arch):
+    if isinstance(client, CloudClient) and arch is Arch.flux_k:
+        pytest.skip("Flux Kontext not supported on Cloud")
     image = Image.load(image_dir / "flowers.webp")
     mask = Mask.load(image_dir / "flowers_mask.png")
+    cond = ConditioningInput("make all flowers have yellow blossoms")
+    cond.edit_reference = True
     job = create(
         WorkflowKind.refine_region,
-        local_client,
-        style=default_style(local_client, Arch.flux_k),
+        client,
+        style=default_style(client, arch),
         canvas=image,
-        cond=ConditioningInput("make all flowers have yellow blossoms"),
+        cond=cond,
         mask=mask,
-        inpaint=automatic_inpaint(image.extent, mask.bounds, Arch.flux_k, ""),
+        inpaint=automatic_inpaint(image.extent, mask.bounds, arch, cond),
     )
-    run_and_save(qtapp, local_client, job, "test_edit_selection")
+    run_and_save(qtapp, client, job, f"test_edit_selection_{arch.name}")
+
+
+def test_edit_reference(qtapp, client):
+    image = Image.load(image_dir / "flowers.webp")
+    ref_image = Image.load(image_dir / "cat.webp")
+    style = default_style(client, Arch.flux2_4b)
+    cond = ConditioningInput("put the cat in the flower pot")
+    cond.control = [ControlInput(ControlMode.reference, ref_image, 1.0)]
+    cond.edit_reference = True
+    job = create(WorkflowKind.refine, client, style=style, canvas=image, cond=cond)
+    run_and_save(qtapp, client, job, "test_edit_reference")
 
 
 def test_refine_max_pixels(qtapp, client):
@@ -839,9 +943,7 @@ def test_fill_control_max_pixels(qtapp, client):
     depth = Image.load(image_dir / "beach_depth_2304x1536.webp")
     prompt = ConditioningInput("beach, the sea, cliffs, palm trees")
     prompt.control = [ControlInput(ControlMode.depth, depth)]
-    inpaint = detect_inpaint(
-        InpaintMode.fill, mask.bounds, Arch.sd15, prompt.positive, prompt.control, 1.0
-    )
+    inpaint = detect_inpaint(InpaintMode.fill, mask.bounds, Arch.sd15, prompt, 1.0)
     job = create(
         WorkflowKind.inpaint,
         client,
@@ -861,7 +963,7 @@ def test_outpaint_resolution_multiplier(qtapp, client):
     image.draw_image(beach, (512, 0))
     mask = Mask.load(image_dir / "beach_outpaint_mask.png")
     prompt = ConditioningInput("photo of a beach and jungle, nature photography, tropical")
-    params = automatic_inpaint(image.extent, mask.bounds, prompt=prompt.positive)
+    params = automatic_inpaint(image.extent, mask.bounds, Arch.sd15, prompt)
     job = create(
         WorkflowKind.inpaint,
         client,
@@ -937,29 +1039,23 @@ def test_custom_workflow(qtapp, local_client: Client):
     run_and_save(qtapp, local_client, job, "test_custom_workflow")
 
 
-inpaint_benchmark = {
+inpaint_benchmark: dict[str, tuple[InpaintMode, str, Bounds | None]] = {
     "tori": (InpaintMode.fill, "photo of tori, japanese garden", None),
     "bruges": (InpaintMode.fill, "photo of a canal in bruges, belgium", None),
     "apple-tree": (
         InpaintMode.expand,
-        "children's illustration of kids next to an apple tree",
-        Bounds(0, 640, 1024, 384),
+        "children's illustration showing kids next to an apple tree with a ladder",
+        Bounds(0, 480, 1024, 1024 - 480),
     ),
     "girl-cornfield": (
         InpaintMode.expand,
-        "anime artwork of girl in a cornfield",
-        Bounds(0, 0, 773 - 261, 768),
-    ),
-    "cuban-guitar": (InpaintMode.replace_background, "photo of a beach bar", None),
-    "jungle": (
-        InpaintMode.fill,
-        "concept artwork of a lake in a forest",
-        Bounds(680, 640, 1480, 1280),
+        "anime artwork showing a girl standing in a wheat field under a blue sky",
+        Bounds(0, 0, 1200 - 400, 1272),
     ),
     "street": (InpaintMode.remove_object, "photo of a street in tokyo", None),
     "nature": (
         InpaintMode.add_object,
-        "photo of a black bear standing in a stony river bed",
+        "photo of a stony river bed surrounded by trees. on the right side there is a black bear",
         Bounds(420, 200, 604, 718),
     ),
     "park": (
@@ -972,6 +1068,12 @@ inpaint_benchmark = {
         "superman giving a speech at a congress hall filled with people",
         None,
     ),
+    "woman-travel": (
+        InpaintMode.add_object,
+        "photo of a woman in a trenchcoat at a brisk walk. she is pulling a trolley suitcase. it is spring, she is walking alongside a brick wall trimmed by a victorian style fence. tree branches can be seen reaching over the wall, with early blossom buds. the woman is seen in profile, she has long hair. her clothes are fashionable and she is wearing sunglasses.",
+        Bounds(275, 400, 1024 - 275, 1280 - 400),
+    ),
+    "bistro-table": (InpaintMode.remove_object, "photo of an empty bistro table", None),
 }
 
 
@@ -984,7 +1086,10 @@ def run_inpaint_benchmark(
     if bounds:
         mask = Mask.crop(mask, bounds)
     text = ConditioningInput(prompt if prompt_mode == "prompt" else "")
-    params = detect_inpaint(mode, mask.bounds, sdver, text.positive, [], 1.0)
+    params = detect_inpaint(mode, mask.bounds, sdver, text, 1.0)
+    params.blend = 30
+    params.feather = min(81, max(33, int(0.1 * mask.bounds.extent.diagonal)))
+    params.grow = 4 + params.feather // 2
     job = create(
         WorkflowKind.inpaint,
         client,
@@ -1011,7 +1116,7 @@ def test_inpaint_benchmark(pytestconfig, qtapp, client):
     seeds = [4213, 897281]
     prompt_modes = ["prompt", "noprompt"]
     scenarios = inpaint_benchmark.keys()
-    sdvers = [Arch.sd15, Arch.sdxl]
+    sdvers = [Arch.sdxl, Arch.zimage, Arch.flux2_4b]
     runs = itertools.product(sdvers, scenarios, prompt_modes, seeds)
 
     for sdver, scenario, prompt_mode, seed in runs:

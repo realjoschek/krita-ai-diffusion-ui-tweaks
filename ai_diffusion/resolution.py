@@ -142,20 +142,19 @@ class CheckpointResolution(NamedTuple):
     max_scale: float
 
     @staticmethod
-    def compute(extent: Extent, arch: Arch, style: Style | None = None):
+    def compute(extent: Extent, arch: Arch, style: Style | None = None, inpaint=False):
         arch = Arch.sdxl if arch.is_sdxl_like else arch
-        arch = (
-            Arch.flux if arch.is_flux_like or arch is Arch.chroma or arch is Arch.zimage else arch
-        )
-        arch = Arch.qwen if arch.is_qwen_like else arch
         if style is None or style.preferred_resolution == 0:
-            min_size, max_size, min_pixel_count, max_pixel_count = {
+            res = {
                 Arch.sd15: (512, 768, 512**2, 512 * 768),
                 Arch.sdxl: (640, 1280, 800**2, 1024**2),
                 Arch.sd3: (512, 1536, 512**2, 1536**2),
-                Arch.flux: (256, 2048, 512**2, 2048**2),
-                Arch.qwen: (256, 2048, 512**2, 2048**2),
-            }[arch]
+            }
+            default = (256, 2048, 512**2, 2048**2)
+            if inpaint:
+                # Inpaint models for Flux/Z-Image only work reliably around 1MP
+                default = (640, 1280, 512**2, 1024**2)
+            min_size, max_size, min_pixel_count, max_pixel_count = res.get(arch, default)
         else:
             range_offset = multiple_of(round(0.2 * style.preferred_resolution), 8)
             min_size = style.preferred_resolution - range_offset
@@ -181,23 +180,22 @@ def prepare_diffusion_input(
     style: Style,
     perf: PerformanceSettings,
     downscale=True,
+    inpaint=False,
 ):
     # Take settings into account to compute the desired resolution for diffusion.
     desired = apply_resolution_settings(extent, perf)
 
     # The checkpoint may require a different resolution than what is requested.
-    mult = 8
-    if arch.is_flux_like or arch is Arch.chroma:
-        mult = 16
-    if arch is Arch.sd3:
-        mult = 64
+    mult = arch.latent_compression_factor
     if arch.is_edit:
         downscale = False  # Never use 2-pass generation for edit models
 
-    min_size, max_size, min_scale, max_scale = CheckpointResolution.compute(desired, arch, style)
+    min_size, max_size, min_scale, max_scale = CheckpointResolution.compute(
+        desired, arch, style, inpaint
+    )
 
-    if downscale and max_scale < 1 and any(x > max_size for x in desired):
-        # Desired resolution is larger than the maximum size. Do 2 passes:
+    if downscale and max_scale < 0.9 and any(x > max_size for x in desired):
+        # Desired resolution is significantly larger than the maximum size. Do 2 passes:
         # first pass at checkpoint resolution, then upscale to desired resolution and refine.
         input = initial = (desired * max_scale).multiple_of(mult)
         desired = desired.multiple_of(mult)
@@ -229,17 +227,17 @@ def prepare_diffusion_input(
 
 
 def prepare_extent(
-    extent: Extent, sd_ver: Arch, style: Style, perf: PerformanceSettings, downscale=True
+    extent: Extent, arch: Arch, style: Style, perf: PerformanceSettings, downscale=True
 ):
-    scaled, _, batch = prepare_diffusion_input(extent, None, sd_ver, style, perf, downscale)
+    scaled, _, batch = prepare_diffusion_input(extent, None, arch, style, perf, downscale)
     return ImageInput(scaled.as_input), batch
 
 
 def prepare_image(
-    image: Image, sd_ver: Arch, style: Style, perf: PerformanceSettings, downscale=True
+    image: Image, arch: Arch, style: Style, perf: PerformanceSettings, downscale=True, inpaint=False
 ):
     scaled, out_image, batch = prepare_diffusion_input(
-        image.extent, image, sd_ver, style, perf, downscale
+        image.extent, image, arch, style, perf, downscale, inpaint
     )
     assert out_image is not None
     return ImageInput(scaled.as_input, out_image), batch
@@ -282,10 +280,10 @@ class TileLayout:
     blending: int
     tile_count: Extent
 
-    def __init__(self, extent: Extent, min_tile_size: int, padding: int):
+    def __init__(self, extent: Extent, min_tile_size: int, padding: int, multiple: int):
         self.image_extent = extent
         self.min_size = min_tile_size
-        self.padding = padding
+        self.padding = multiple_of(padding, multiple)
         self.blending = max(1, self.padding // 16) * 8 if padding > 0 else 0
         self.tile_count = (self.image_extent // (min_tile_size - 2 * self.padding)).at_least(1)
 
@@ -294,12 +292,12 @@ class TileLayout:
             math.ceil(padded.width / self.tile_count.width),
             math.ceil(padded.height / self.tile_count.height),
         )
-        self.tile_extent = tile_extent.multiple_of(8)
+        self.tile_extent = tile_extent.multiple_of(multiple)
 
     @staticmethod
-    def from_denoise_strength(extent: Extent, min_tile_size: int, strength: float):
-        padding = round((16 + 64 * strength) / 8) * 8
-        return TileLayout(extent, min_tile_size, padding)
+    def from_denoise_strength(extent: Extent, min_tile_size: int, strength: float, multiple: int):
+        padding = multiple_of(round(16 + 64 * strength), multiple)
+        return TileLayout(extent, min_tile_size, padding, multiple)
 
     @property
     def total_tiles(self):

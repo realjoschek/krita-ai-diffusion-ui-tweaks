@@ -126,7 +126,7 @@ def test_inpaint_context(area, expected_extent, expected_crop: tuple[int, int] |
     "input,expected_initial,expected_desired",
     [
         (Extent(1536, 600), Extent(1008, 392), Extent(1536, 600)),
-        (Extent(400, 1024), Extent(392, 1008), Extent(400, 1024)),
+        (Extent(400, 1024), Extent(400, 1024), Extent(400, 1024)),
         (Extent(777, 999), Extent(560, 712), Extent(784, 1000)),
     ],
 )
@@ -141,6 +141,14 @@ def test_prepare_highres(input, expected_initial, expected_desired):
         and r.extent.desired == expected_desired
         and r.extent.target == input
     )
+
+
+def test_prepare_hightres_inpaint():
+    input = Extent(3000, 2000)
+    image = Image.create(input)
+    r, _ = resolution.prepare_image(image, Arch.flux, dummy_style, perf, inpaint=True)
+    assert r.extent.initial == Extent(1256, 840)
+    assert r.extent.desired == input
 
 
 @pytest.mark.parametrize(
@@ -346,13 +354,28 @@ tile_layouts = {
             {"start": Point(512, 512), "end": Point(1024, 1024)},
         ],
     },
+    "multiple-16": {
+        "extent": Extent(1472, 512),
+        "min_tile_size": 512,
+        "padding": 32,
+        "multiple": 16,
+        "tile_count": (3, 1),
+        "tile_size": (544, 512),
+        "tiles": [
+            {"start": Point(0, 0), "end": Point(544, 512)},
+            {"start": Point(480, 0), "end": Point(1024, 512)},
+            {"start": Point(960, 0), "end": Point(1472, 512)},
+        ],
+    },
 }
 
 
 @pytest.mark.parametrize("test_set", tile_layouts.keys())
 def test_tile_layout(test_set):
     params = tile_layouts[test_set]
-    layout = TileLayout(params["extent"], params["min_tile_size"], params["padding"])
+    layout = TileLayout(
+        params["extent"], params["min_tile_size"], params["padding"], params.get("multiple", 8)
+    )
     assert layout.tile_count == params["tile_count"]
     assert layout.tile_extent == params["tile_size"]
     assert layout.total_tiles == len(params["tiles"])

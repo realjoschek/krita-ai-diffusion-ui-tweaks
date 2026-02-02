@@ -182,13 +182,35 @@
       ]
     },
     {
-      "id": "vae-flux-flux",
+      "id": "vae-default-flux",
       "name": "VAE (Flux)",
       "files": [
         {
           "path": "models/vae/flux_vae.safetensors",
           "url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors",
           "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+        }
+      ]
+    },
+    {
+      "id": "text_encoder-qwen_3_4b-flux2_4b",
+      "name": "Qwen 3 4B",
+      "files": [
+        {
+          "path": "models/text_encoders/Qwen3-4B-Q4_K_M.gguf",
+          "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+          "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a"
+        }
+      ]
+    },
+    {
+      "id": "vae-default-flux2_4b",
+      "name": "VAE (Flux 2)",
+      "files": [
+        {
+          "path": "models/vae/flux2-vae.safetensors",
+          "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors",
+          "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
         }
       ]
     }
@@ -331,6 +353,17 @@
         }
       ],
       "requirements": "cuda_fp4"
+    },
+    {
+      "id": "checkpoint-bf16-flux2_4b",
+      "name": "Flux 2 Klein 4B",
+      "files": [
+        {
+          "path": "models/diffusion_models/flux-2-klein-4b.safetensors",
+          "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/main/flux-2-klein-4b.safetensors",
+          "sha256": "ec3d4e733a771f61c052fb4856c48b336c55eaf2c65487c2a1faeb9bbda7a343"
+        }
+      ]
     }
   ],
   "upscale": [
@@ -772,39 +805,5 @@
       ]
     }
   ],
-  "deprecated": [
-    {
-      "id": "checkpoint-realistic_vision-sd15",
-      "name": "Realistic Vision (SD1.5 - Photography)",
-      "files": [
-        {
-          "path": "models/checkpoints/realisticVisionV51_v51VAE.safetensors",
-          "url": "https://huggingface.co/lllyasviel/fav_models/resolve/main/fav/realisticVisionV51_v51VAE.safetensors",
-          "sha256": "15012c538f503ce2ebfc2c8547b268c75ccdaff7a281db55399940ff1d70e21d"
-        }
-      ]
-    },
-    {
-      "id": "checkpoint-flux_schnell-flux",
-      "name": "Flux [schnell]",
-      "files": [
-        {
-          "path": "models/checkpoints/flux1-schnell-fp8.safetensors",
-          "url": "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
-          "sha256": "ead426278b49030e9da5df862994f25ce94ab2ee4df38b556ddddb3db093bf72"
-        }
-      ]
-    },
-    {
-      "id": "checkpoint-flat2d_animerge-sd15",
-      "name": "Flat2D AniMerge (SD1.5 - Cartoon/Anime)",
-      "files": [
-        {
-          "path": "models/checkpoints/flat2DAnimerge_v45Sharp.safetensors",
-          "url": "https://huggingface.co/Acly/SD-Checkpoints/resolve/main/flat2DAnimerge_v45Sharp.safetensors",
-          "sha256": "fe95063ba60bc9298d60eb252f98d057039d9a882158afe042f266bdc1b1e528"
-        }
-      ]
-    }
-  ]
+  "deprecated": []
 }

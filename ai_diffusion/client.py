@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 from abc import ABC, abstractmethod
 from collections import deque
 from enum import Enum
@@ -84,6 +85,16 @@ class User(QObject, ObservableProperties):
         super().__init__()
         self.id = id
         self.name = name
+
+
+class News(NamedTuple):
+    text: str
+    digest: str
+
+    @staticmethod
+    def create(text: str):
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return News(text, digest)
 
 
 class DeviceInfo(NamedTuple):
@@ -178,7 +189,7 @@ class CheckpointInfo(NamedTuple):
 
     @property
     def name(self):
-        return self.filename.removesuffix(".safetensors")
+        return self.filename.removesuffix(".safetensors").replace("\\", "/")
 
     def to_dict(self):
         return {
@@ -292,6 +303,14 @@ class ModelDict:
             if isinstance(key, ControlMode) and key.can_substitute_universal(self.arch):
                 result = self.find(ControlMode.universal)
         return result
+
+    def find_control(self, mode: ControlMode, allow_universal=True):
+        return (
+            self.control.find(mode, allow_universal)
+            or self.model_patch.find(mode, allow_universal)
+            or self.ip_adapter.find(mode)
+            or self.lora.find(mode)
+        )
 
     def for_version(self, arch: Arch):
         return ModelDict(self._models, self.kind, arch)
@@ -420,6 +439,10 @@ class Client(ABC):
 
     @property
     def user(self) -> User | None:
+        return None
+
+    @property
+    def news(self) -> News | None:
         return None
 
     @property

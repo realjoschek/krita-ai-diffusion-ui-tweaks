@@ -610,7 +610,7 @@ class ConnectionSettings(SettingsTab):
         text = ""
         if isinstance(res.missing, list):
             text = (
-                _("The following ComfyUI custom nodes are missing")
+                _("The following ComfyUI custom nodes are missing or too old")
                 + ":<ul>"
                 + "\n".join(
                     (f"<li>{p.name} <a href='{p.url}'>{p.url}</a></li>" for p in res.missing)
@@ -619,6 +619,7 @@ class ConnectionSettings(SettingsTab):
                 + _(
                     "Please install or update the custom node package, then restart the server and try again."
                 )
+                + _("If nodes are still missing, check the ComfyUI output at startup for errors.")
                 + "<br>"
             )
         else:
@@ -662,8 +663,8 @@ class DiffusionSettings(SettingsTab):
         super().__init__(_("Diffusion Settings"))
 
         S = Settings
-        self.add("selection_grow", SliderSetting(S._selection_grow, self, 0, 25, "{} %"))
         self.add("selection_feather", SliderSetting(S._selection_feather, self, 0, 25, "{} %"))
+        self.add("selection_blend", SliderSetting(S._selection_blend, self, 0, 100, "{} px"))
         self.add("selection_padding", SliderSetting(S._selection_padding, self, 0, 25, "{} %"))
         self.add("nsfw_filter", ComboBoxSetting(S._nsfw_filter, parent=self))
 

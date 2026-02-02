@@ -19,7 +19,7 @@ from .api import ConditioningInput, ControlInput, WorkflowKind, WorkflowInput, S
 from .api import FillMode, ImageInput, CustomWorkflowInput, UpscaleInput
 from .api import InpaintMode, InpaintContext, InpaintParams
 from .localization import translate as _
-from .util import clamp, ensure, trim_text, client_logger as log
+from .util import clamp, ensure, unique, trim_text, client_logger as log
 from .settings import ApplyBehavior, ApplyRegionBehavior, GenerationFinishedAction, ImageFileFormat
 from .settings import settings
 from .network import NetworkError
@@ -27,7 +27,7 @@ from .image import Extent, Image, Mask, Bounds, DummyImage
 from .client import Client, ClientMessage, ClientEvent, ClientOutput
 from .client import is_style_supported, filter_supported_styles, resolve_arch
 from .custom_workflow import CustomWorkspace, WorkflowCollection, CustomGenerationMode
-from .document import Document, KritaDocument
+from .document import Document, KritaDocument, SelectionModifiers
 from .layer import Layer, LayerType, RestoreActiveLayer
 from .pose import Pose
 from .style import Style, Styles, Arch
@@ -39,7 +39,7 @@ from .control import ControlLayer
 from .region import Region, RegionLink, RootRegion, process_regions, get_region_inpaint_mask
 from .resources import ControlMode
 from .resolution import compute_bounds, compute_relative_bounds
-from .text import create_img_metadata
+from .text import create_img_metadata, extract_layers
 
 
 class QueueMode(Enum):
@@ -68,6 +68,7 @@ class ErrorKind(Enum):
     insufficient_funds = 201
     warning = 300
     incompatible_lora = 301
+    validation_warning = 302
 
     @property
     def is_warning(self):
@@ -151,6 +152,7 @@ class Model(QObject, ObservableProperties):
         self.jobs.selection_changed.connect(self.update_preview)
         connection.state_changed.connect(self._init_on_connect)
         connection.error_changed.connect(self._forward_error)
+        self.custom.validation_error_changed.connect(self._forward_validation_error)
         Styles.list().changed.connect(self._init_on_connect)
         self._init_on_connect()
 
@@ -166,6 +168,12 @@ class Model(QObject, ObservableProperties):
 
     def _forward_error(self, error: str):
         self.report_error(error if error else no_error)
+
+    def _forward_validation_error(self, error: str):
+        if error:
+            self.report_error(Error(ErrorKind.validation_warning, error))
+        elif self.error.kind is ErrorKind.validation_warning:
+            self.clear_error()
 
     def generate(self):
         """Enqueue image generation for the current setup."""
@@ -214,27 +222,25 @@ class Model(QObject, ObservableProperties):
 
     def _prepare_workflow(self, dryrun=False):
         arch = self.arch
-        is_edit = arch.is_edit
         workflow_kind = WorkflowKind.generate
         strength = self.strength
         if arch is Arch.qwen_l:
             strength = 1.0
-        if strength < 1.0 or is_edit:
+        if strength < 1.0 or self.is_editing:
             workflow_kind = WorkflowKind.refine
         client = self._connection.client
         image = None
-        inpaint_mode = InpaintMode.fill
+        inpaint_mode: InpaintMode | None = None
         inpaint = None
         extent = self._doc.extent
         regions = self.active_regions
         region_layer = None
 
-        selection_mod = get_selection_modifiers(self.inpaint.mode, strength)
-        mask, selection_bounds = self._doc.create_mask_from_selection(
-            selection_mod.padding, invert=selection_mod.invert, min_size=256
-        )
+        smod = get_selection_modifiers(arch, self.inpaint.mode, strength)
+        mask, selection_bounds = self._doc.create_mask_from_selection(smod)
         bounds = Bounds(0, 0, *extent)
         if mask is None:  # Check for region inpaint
+            inpaint_mode = InpaintMode.fill
             region_layer = regions.get_active_region_layer(use_parent=not self.region_only)
             if not region_layer.is_root:
                 mask = get_region_inpaint_mask(region_layer, extent)
@@ -251,14 +257,16 @@ class Model(QObject, ObservableProperties):
         else:
             conditioning, job_regions = ConditioningInput("", ""), []
 
-        original_conditioning = conditioning
         seed = self.seed if self.fixed_seed else workflow.generate_seed()
         if not dryrun and self.fixed_seed and self.incremental_seed:
             self.seed += 1
-        conditioning, loras, layers, region_layers, prompt_meta = workflow.prepare_prompts(
-            conditioning, self.style, seed, arch, FileLibrary.instance()
+
+        if not dryrun:
+            conditioning = self._add_reference_layers(conditioning)
+        original_conditioning = conditioning
+        conditioning, loras, prompt_meta = workflow.prepare_prompts(
+            conditioning, self.style, seed, arch, inpaint_mode
         )
-        self._add_reference_layers(conditioning, layers, region_layers)
 
         if mask is not None or workflow_kind is WorkflowKind.refine:
             image = self._get_current_image(bounds) if not dryrun else DummyImage(bounds.extent)
@@ -272,13 +280,12 @@ class Model(QObject, ObservableProperties):
             bounds, mask.bounds = compute_relative_bounds(bounds, mask.bounds)
 
             if inpaint_mode is InpaintMode.custom:
-                inpaint = self.inpaint.get_params(mask)
+                inpaint = self.inpaint.get_params(mask, self.is_editing)
             else:
-                pos, ctrl = conditioning.positive, conditioning.control
                 inpaint = workflow.detect_inpaint(
-                    inpaint_mode, mask.bounds, arch, pos, ctrl, strength
+                    inpaint_mode, mask.bounds, arch, conditioning, strength
                 )
-            inpaint.grow, inpaint.feather = selection_mod.apply(selection_bounds)
+            inpaint = calc_selection_pre_process(inpaint, selection_bounds, smod)
 
         input = workflow.prepare(
             workflow_kind,
@@ -300,6 +307,7 @@ class Model(QObject, ObservableProperties):
         job_params = JobParams(bounds, job_name, regions=job_regions)
         job_params.set_style(self.active_style, ensure(input.models).checkpoint)
         job_params.set_control(regions.control)
+        job_params.inpaint_mode = inpaint_mode
         job_params.is_layered = arch is Arch.qwen_l
         job_params.metadata.update(prompt_meta)
         job_params.metadata["loras"] = [dict(name=l.name, weight=l.strength) for l in loras]
@@ -331,7 +339,7 @@ class Model(QObject, ObservableProperties):
                 input = replace(input, sampling=replace(sampling, seed=seed))
                 if original_cond:  # re-evaluate wildcards in prompts after the seed change
                     next_prompt = workflow.prepare_prompts(
-                        original_cond, self.style, seed, self.arch, FileLibrary.instance()
+                        original_cond, self.style, seed, self.arch, params.inpaint_mode
                     )
                     input.conditioning = next_prompt.conditioning
                     params.metadata = params.metadata | next_prompt.metadata
@@ -373,7 +381,7 @@ class Model(QObject, ObservableProperties):
         else:
             conditioning, job_regions = ConditioningInput(sys_prompt), []
         models = client.models.for_arch(self.arch)
-        has_unblur = models.control.find(ControlMode.blur, allow_universal=True) is not None
+        has_unblur = models.find_control(ControlMode.blur) is not None
         if has_unblur and params.unblur_strength > 0.0:
             control = ControlInput(ControlMode.blur, None, params.unblur_strength)
             conditioning.control.append(control)
@@ -455,7 +463,7 @@ class Model(QObject, ObservableProperties):
                 input, _ = self._prepare_upscale_image(dryrun=True)
             else:
                 return 0
-            return input.cost
+            return input.cost * self.batch_count
         except Exception as e:
             util.client_logger.warning(f"Failed to estimate workflow cost: {type(e)} {str(e)}")
             return 0
@@ -467,7 +475,7 @@ class Model(QObject, ObservableProperties):
     def _prepare_live_workflow(self):
         strength = self.live.strength
         workflow_kind = WorkflowKind.generate
-        if strength < 1.0 or self.arch.is_edit:
+        if strength < 1.0 or self.is_editing:
             workflow_kind = WorkflowKind.refine
         client = self._connection.client
         min_mask_size = 512 if self.arch is Arch.sd15 else 800
@@ -477,11 +485,9 @@ class Model(QObject, ObservableProperties):
         inpaint = InpaintParams(InpaintMode.fill, Bounds(0, 0, *extent))
 
         image = None
-        selection_mod = get_selection_modifiers(inpaint.mode, strength, is_live=True)
-        mask, selection_bounds = self._doc.create_mask_from_selection(
-            selection_mod.padding, min_size=min_mask_size, square=True
-        )
-        inpaint.grow, inpaint.feather = selection_mod.apply(selection_bounds)
+        smod = get_selection_modifiers(self.arch, inpaint.mode, strength, min_mask_size)
+        mask, selection_bounds = self._doc.create_mask_from_selection(smod)
+        inpaint = calc_selection_pre_process(inpaint, selection_bounds, smod)
 
         bounds = Bounds(0, 0, *self._doc.extent)
         region_layer = self.regions.get_active_region_layer(use_parent=False)
@@ -490,6 +496,7 @@ class Model(QObject, ObservableProperties):
             free_space = mask.bounds.extent - region_layer.compute_bounds().extent
             inpaint.grow = clamp(free_space.shortest_side // 2, 8, 128)
             inpaint.feather = inpaint.grow // 2
+            inpaint.blend = max(inpaint.feather // 2, 15)
 
         if mask is not None:
             workflow_kind = WorkflowKind.refine_region
@@ -499,10 +506,10 @@ class Model(QObject, ObservableProperties):
 
         conditioning, job_regions = process_regions(self.regions, bounds)
         conditioning.language = self.prompt_translation_language
-        conditioning, loras, layers, region_layers, _ = workflow.prepare_prompts(
-            conditioning, self.style, self.seed, self.arch, FileLibrary.instance()
+        conditioning = self._add_reference_layers(conditioning)
+        conditioning, loras, _ = workflow.prepare_prompts(
+            conditioning, self.style, self.seed, self.arch, is_live=True
         )
-        self._add_reference_layers(conditioning, layers, region_layers)
 
         input = workflow.prepare(
             workflow_kind,
@@ -540,8 +547,8 @@ class Model(QObject, ObservableProperties):
             mask = None
 
             if selection_node := next(wf.find(type="ETN_KritaSelection"), None):
-                mods = get_selection_modifiers(InpaintMode.fill, self.strength, is_live)
-                mask, select_bounds = self._doc.create_mask_from_selection(mods.padding, 8, 256)
+                mods = get_selection_modifiers(Arch.sdxl, InpaintMode.fill, self.strength)
+                mask, select_bounds = self._doc.create_mask_from_selection(mods)
                 mask, bounds = self.custom.prepare_mask(selection_node, mask, select_bounds, bounds)
 
             img_input = ImageInput.from_extent(bounds.extent)
@@ -549,14 +556,40 @@ class Model(QObject, ObservableProperties):
             img_input.hires_mask = mask.to_image(bounds.extent) if mask else None
 
             params = self.custom.collect_parameters(self.layers, canvas_bounds, is_anim)
+
+            custom_input = CustomWorkflowInput(wf.root, params)
+            metadata: dict[str, Any] = dict(self.custom.params)
+            job_params = JobParams(bounds, self.custom.job_name, metadata=metadata)
+
+            style_node = next(wf.find(type="ETN_KritaStyleAndPrompt"), None)
+            if style_node is not None:
+                style = self.style
+                is_live = style_node.input("sampler_preset", "auto") == "live"
+                custom_input.models = style.get_models(self._connection.client.models.checkpoints)
+                custom_input.sampling = workflow.sampling_from_style(style, 1.0, is_live)
+
+                cond = ConditioningInput(self.regions.positive, self.regions.negative)
+                arch = resolve_arch(style, self._connection.client_if_connected)
+                prepared = workflow.prepare_prompts(cond, style, seed, arch)
+                custom_input.positive_evaluated = prepared.metadata["prompt_final"]
+                custom_input.negative_evaluated = prepared.metadata["negative_prompt_final"]
+                custom_input.models.loras = unique(
+                    custom_input.models.loras + prepared.loras, key=lambda l: l.name
+                )
+
+                job_params.set_style(self.style, custom_input.models.checkpoint)
+                metadata.update(prepared.metadata)
+                metadata["loras"] = [
+                    dict(name=l.name, weight=l.strength) for l in custom_input.models.loras
+                ]
+
             input = WorkflowInput(
                 WorkflowKind.custom,
                 img_input,
                 sampling=SamplingInput("custom", "custom", 1, 1000, seed=seed),
                 inpaint=InpaintParams(InpaintMode.fill, bounds),
-                custom_workflow=CustomWorkflowInput(wf.root, params),
+                custom_workflow=custom_input,
             )
-            job_params = JobParams(bounds, self.custom.job_name, metadata=self.custom.params)
             job_kind = {
                 CustomGenerationMode.regular: JobKind.diffusion,
                 CustomGenerationMode.live: JobKind.live_preview,
@@ -592,14 +625,15 @@ class Model(QObject, ObservableProperties):
         return self._doc.get_image(bounds, exclude_layers=exclude)
 
     def generate_control_layer(self, control: ControlLayer):
-        ok, msg = self._doc.check_color_mode()
+        doc = self.document
+        ok, msg = doc.check_color_mode()
         if not ok and msg:
             self.report_error(msg)
             return
 
         try:
-            image = self._doc.get_image(Bounds(0, 0, *self._doc.extent))
-            mask, _ = self.document.create_mask_from_selection(padding=0.25, multiple=64)
+            image = doc.get_image(Bounds(0, 0, *self._doc.extent))
+            mask, _ = doc.create_mask_from_selection(SelectionModifiers(pad_rel=0.25, multiple=64))
             bounds = mask.bounds if mask else None
             perf = self._performance_settings(self._connection.client)
             input = workflow.prepare_create_control_image(image, control.mode, perf, bounds)
@@ -911,11 +945,11 @@ class Model(QObject, ObservableProperties):
             self._style_connection = style.changed.connect(self._handle_style_changed)
             self.style_changed.emit(style)
             self.modified.emit(self, "style")
-            self.edit_mode = self.edit_mode and self.edit_style is not None
+            self.edit_mode = self.is_editing
 
     def _handle_style_changed(self):
         self.style_changed.emit(self.style)
-        self.edit_mode = self.edit_mode and self.edit_style is not None
+        self.edit_mode = self.is_editing
 
     def generate_seed(self):
         self.seed = workflow.generate_seed()
@@ -930,9 +964,7 @@ class Model(QObject, ObservableProperties):
             return InpaintMode.fill
         return self.inpaint.mode
 
-    def _add_reference_layers(
-        self, cond: ConditioningInput, layers: list[str], region_layers: list[list[str]]
-    ):
+    def _add_reference_layers(self, cond: ConditioningInput):
         def add_refs(control: list[ControlInput], layer_names: list[str]):
             for layer_name in layer_names:
                 uid = next((l.id for l in self._doc.layers.images if l.name == layer_name), None)
@@ -941,9 +973,15 @@ class Model(QObject, ObservableProperties):
                 ctrl = ControlLayer(self, ControlMode.reference, uid, 0)
                 control.append(ctrl.to_api())
 
+        _prompt, layers = extract_layers(cond.positive)
         add_refs(cond.control, layers)
-        for region, r_layers in zip(cond.regions, region_layers):
-            add_refs(region.control, r_layers)
+
+        for region in cond.regions:
+            _prompt, region_layers = extract_layers(region.positive)
+            add_refs(region.control, region_layers)
+
+        cond.edit_reference = self.is_editing
+        return cond
 
     def _performance_settings(self, client: Client):
         result = client.performance_settings
@@ -1016,13 +1054,26 @@ class Model(QObject, ObservableProperties):
     @property
     def edit_style(self) -> Style | None:
         style_arch = resolve_arch(self.style, self._connection.client_if_connected)
-        if style_arch.is_edit:
+        if style_arch.supports_edit:
             return self.style
         if style_id := self.style.linked_edit_style:
             if style := Styles.list().find(style_id):
                 if is_style_supported(style, self._connection.client_if_connected):
                     return style
         return None
+
+    @property
+    def can_edit(self):
+        return self.edit_style is not None
+
+    @property
+    def can_toggle_edit(self):
+        style_arch = resolve_arch(self.style, self._connection.client_if_connected)
+        return not style_arch.is_edit and self.can_edit
+
+    @property
+    def is_editing(self):
+        return self.arch.is_edit or (self.can_edit and self.edit_mode)
 
 
 class CustomInpaint(QObject, ObservableProperties):
@@ -1041,8 +1092,9 @@ class CustomInpaint(QObject, ObservableProperties):
     context_layer_id_changed = pyqtSignal(QUuid)
     modified = pyqtSignal(QObject, str)
 
-    def get_params(self, mask: Mask):
-        params = InpaintParams(self.mode, mask.bounds, self.fill)
+    def get_params(self, mask: Mask, is_editing: bool):
+        fill = FillMode.none if is_editing else self.fill
+        params = InpaintParams(self.mode, mask.bounds, fill)
         params.use_inpaint_model = self.use_inpaint
         params.use_condition_mask = self.use_prompt_focus
         return params
@@ -1434,15 +1486,16 @@ class AnimationWorkspace(QObject, ObservableProperties):
         m = self._model
 
         kind = WorkflowKind.generate
-        if m.strength < 1.0 or m.arch.is_edit:
+        if m.strength < 1.0 or m.is_editing:
             kind = WorkflowKind.refine
         bounds = Bounds(0, 0, *m.document.extent)
+        is_live = self.sampling_quality is SamplingQuality.fast
         conditioning, _ = process_regions(m.regions, bounds, self._model.layers.root, time=time)
         conditioning.language = m.prompt_translation_language
-        conditioning, loras, layers, region_layers, prompt_meta = workflow.prepare_prompts(
-            conditioning, m.style, seed, m.arch, FileLibrary.instance()
+        conditioning = m._add_reference_layers(conditioning)
+        conditioning, loras, prompt_meta = workflow.prepare_prompts(
+            conditioning, m.style, seed, m.arch, is_live=is_live
         )
-        m._add_reference_layers(conditioning, layers, region_layers)
 
         return workflow.prepare(
             kind,
@@ -1455,7 +1508,7 @@ class AnimationWorkspace(QObject, ObservableProperties):
             models=m._connection.client.models,
             files=FileLibrary.instance(),
             strength=m.strength,
-            is_live=self.sampling_quality is SamplingQuality.fast,
+            is_live=is_live,
         )
 
     async def _generate_frame(self):
@@ -1561,39 +1614,52 @@ class AnimationWorkspace(QObject, ObservableProperties):
             self.target_image_changed.emit(image)
 
 
-class SelectionModifiers(NamedTuple):
-    grow: float
-    feather: float
-    padding: float
-    invert: bool
-
-    def apply(self, selection_bounds: Bounds | None):
-        if selection_bounds is None:
-            return 0, 0
-        size_factor = selection_bounds.extent.diagonal
-        return int(self.grow * size_factor), int(self.feather * size_factor)
-
-
-def get_selection_modifiers(inpaint_mode: InpaintMode, strength: float, is_live=False):
-    grow = settings.selection_grow / 100 if not is_live else settings.selection_feather / 200
+def get_selection_modifiers(arch: Arch, inpaint_mode: InpaintMode, strength: float, min_size=256):
     feather = settings.selection_feather / 100
-    padding = settings.selection_padding / 100
     invert = False
-
-    if inpaint_mode is InpaintMode.remove_object and strength == 1.0:
-        # avoid leaving any border pixels of the object to be removed within the
-        # area where the mask is 1.0, it will confuse inpainting models
-        feather = min(feather, grow * 0.5)
 
     if inpaint_mode is InpaintMode.replace_background and strength == 1.0:
         # only minimal grow/feather as there is often no desired transition between
         # forground object and background (to be replaced by something else entirely)
-        grow = min(grow, 0.01)
         feather = min(feather, 0.01)
         invert = True
 
-    padding = padding + grow + 0.5 * feather
-    return SelectionModifiers(grow, feather, padding, invert)
+    strength = max(0.5, min(1.0, strength))
+
+    return SelectionModifiers(
+        feather_rel=feather * strength,
+        feather_min_px=int(settings.selection_min_transition * strength),
+        pad_rel=settings.selection_padding / 100,
+        pad_offset_px=settings.selection_grow_offset,
+        size_min_px=min_size,
+        multiple=arch.latent_compression_factor,
+        invert=invert,
+    )
+
+
+def calc_selection_pre_process(
+    inpaint: InpaintParams, bounds: Bounds | None, mods: SelectionModifiers
+):
+    """
+    Computes the parameters grow, feather and blend for mask processing in the workflow:
+    * denoise_mask = selection -> dilate(size=grow) -> blur(size=feather)
+    * composite_mask = denoise_mask -> erode(size=blend/2) -> blur(size=blend)
+    Both masks should always be fully opaque inside the original selection mask.
+    """
+    inpaint = copy(inpaint)
+    if bounds is None or settings.selection_feather == 0:
+        inpaint.feather = 0
+        inpaint.grow = 0
+        inpaint.blend = 0
+        return inpaint
+
+    size_factor = bounds.extent.diagonal
+    inpaint.feather = int(mods.feather_rel * size_factor)
+    if not mods.invert:
+        inpaint.feather = max(inpaint.feather, mods.feather_min_px)
+    inpaint.grow = settings.selection_grow_offset + inpaint.feather // 2
+    inpaint.blend = min(settings.selection_blend, inpaint.grow + inpaint.feather // 2)
+    return inpaint
 
 
 async def _report_errors(parent: Model, coro):

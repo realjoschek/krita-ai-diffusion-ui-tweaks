@@ -111,6 +111,7 @@ class ConditioningInput:
     control: list[ControlInput] = field(default_factory=list)
     regions: list[RegionInput] = field(default_factory=list)
     language: str = ""
+    edit_reference: bool = False  # use input image as conditioning reference
 
 
 class InpaintMode(Enum):
@@ -146,6 +147,7 @@ class InpaintParams:
     fill: FillMode = FillMode.neutral
     grow: int = 0
     feather: int = 0
+    blend: int = 0
     use_inpaint_model: bool = False
     use_condition_mask: bool = False
     use_reference: bool = False
@@ -177,6 +179,10 @@ class UpscaleInput:
 class CustomWorkflowInput:
     workflow: dict
     params: dict[str, Any]
+    positive_evaluated: str = ""
+    negative_evaluated: str = ""
+    models: CheckpointInput | None = None
+    sampling: SamplingInput | None = None
 
 
 @dataclass
@@ -252,7 +258,7 @@ def _base_cost(arch: Arch):
         return 1
     if arch.is_sdxl_like:
         return 2
-    if arch.is_flux_like or arch is Arch.chroma:
+    if arch.is_flux_like or arch.is_flux2 or arch is Arch.zimage:
         return 4
     return 1
 

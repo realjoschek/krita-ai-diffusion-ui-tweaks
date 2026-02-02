@@ -730,7 +730,7 @@ def _find_text_encoder_models(model_list: Sequence[str]):
     kind = ResourceKind.text_encoder
     return {
         resource_id(kind, Arch.all, te): _find_model(model_list, kind, Arch.all, te)
-        for te in ["clip_l", "clip_g", "t5", "qwen", "qwen_3"]
+        for te in ["clip_l", "clip_g", "t5", "qwen", "qwen_3_4b", "qwen_3_8b"]
     }
 
 
@@ -766,8 +766,11 @@ def _find_clip_vision_model(model_list: Sequence[str]):
 
 
 def _find_model_patches(model_list: Sequence[str]):
-    res = ResourceId(ResourceKind.model_patch, Arch.zimage, ControlMode.universal)
-    return {res.string: _find_model(model_list, res.kind, res.arch, res.identifier)}
+    res = [
+        ResourceId(ResourceKind.model_patch, Arch.zimage, ControlMode.universal),
+        ResourceId(ResourceKind.model_patch, Arch.zimage, ControlMode.blur),
+    ]
+    return {r.string: _find_model(model_list, r.kind, r.arch, r.identifier) for r in res}
 
 
 def _find_style_models(model_list: Sequence[str]):

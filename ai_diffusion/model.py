@@ -784,7 +784,7 @@ class Model(QObject, ObservableProperties):
                 pos = self.layers.active if behavior is ApplyBehavior.layer_active else None
                 layer = self.layers.create(name, image, bounds, above=pos)
                 if settings.joschek_tweaks_transparency_mask:
-                    mask = Mask.rectangle(layer.bounds)
+                    mask = Mask.white(layer.bounds)
                     self.layers.create_mask(
                         "Transparency Mask", mask.to_image(), layer.bounds, layer
                     )
@@ -863,7 +863,7 @@ class Model(QObject, ObservableProperties):
             name, region_image, region_bounds, parent=region_layer, above=insert_pos
         )
         if settings.joschek_tweaks_transparency_mask:
-            mask = Mask.rectangle(layer.bounds)
+            mask = Mask.white(layer.bounds)
             self.layers.create_mask("Transparency Mask", mask.to_image(), layer.bounds, layer)
         return layer
 

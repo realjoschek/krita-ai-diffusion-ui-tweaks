@@ -746,6 +746,10 @@ class Mask:
         return Mask(bounds, QByteArray(bytes(bounds.width * bounds.height)))
 
     @staticmethod
+    def white(bounds: Bounds):
+        return Mask(bounds, QByteArray(b"\xff" * (bounds.width * bounds.height)))
+
+    @staticmethod
     def rectangle(bounds: Bounds, context: Bounds):
         # Note: for testing only, where Krita selection is not available
         m = []

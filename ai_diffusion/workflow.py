@@ -1364,6 +1364,11 @@ def upscale_seedvr2(
     extent: ExtentInput,
     upscale: UpscaleInput,
 ):
+    if not upscale.dit_model:
+        raise ValueError(_("No DiT model selected for SeedVR2 upscaling."))
+    if not upscale.vae_model:
+        raise ValueError(_("No VAE model selected for SeedVR2 upscaling."))
+
     # Determine the target resolution from the extent (controlled by scale slider)
     # This matches how legacy handles final size.
     target_res = min(extent.target.width, extent.target.height)

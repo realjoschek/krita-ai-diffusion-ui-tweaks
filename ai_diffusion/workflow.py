@@ -22,7 +22,7 @@ from .comfy_workflow import ComfyWorkflow, ComfyRunMode, Input, Output, Conditio
 from .comfy_workflow import ComfyNode
 from .localization import translate as _
 from .settings import settings
-from .util import ensure, median_or_zero, unique
+from .util import ensure, median_or_zero, unique, client_logger as log
 
 
 def detect_inpaint_mode(extent: Extent, area: Bounds):
@@ -1383,10 +1383,11 @@ def upscale_seedvr2(
         image = Image.scale(image, new_extent)
 
     img = w.load_image(image)
-    dit = w.load_seedvr2_dit(upscale.dit_model, "cuda")
+    log.info(f"SeedVR2 Models: DIT={upscale.dit_model}, VAE={upscale.vae_model}")
+    dit = w.load_seedvr2_dit(upscale.dit_model, "cuda:0")
     vae = w.load_seedvr2_vae(
         upscale.vae_model,
-        "cuda",
+        "cuda:0",
         encode_tiled=upscale.encode_tiled,
         encode_tile_size=upscale.encode_tile_size,
         encode_tile_overlap=upscale.encode_tile_overlap,
@@ -1977,3 +1978,58 @@ def _check_inpaint_model(inpaint: InpaintParams | None, arch: Arch, models: Clie
             if res := resources.find_resource(res_id):
                 msg += f" Missing '{res.filename}' in folder '{res.folder}'."
             raise ValueError(msg)
+
+
+def upscale_seedvr2(
+    w: ComfyWorkflow,
+    image: Image,
+    extent: ExtentInput,
+    upscale: UpscaleInput,
+):
+    if not upscale.dit_model:
+        raise ValueError(_("No DiT model selected for SeedVR2 upscaling."))
+    if not upscale.vae_model:
+        raise ValueError(_("No VAE model selected for SeedVR2 upscaling."))
+
+    # Determine the target resolution from the extent (controlled by scale slider)
+    # This matches how legacy handles final size.
+    target_res = min(extent.target.width, extent.target.height)
+    target_res = (target_res // 2) * 2
+
+    # Scale the input image to match the target resolution before processing
+    current_min_side = min(image.width, image.height)
+    if current_min_side != target_res:
+        scale_factor = target_res / current_min_side
+        new_extent = image.extent * scale_factor
+        new_extent = Extent((new_extent.width // 2) * 2, (new_extent.height // 2) * 2)
+        image = Image.scale(image, new_extent)
+
+    img = w.load_image(image)
+    dit = w.load_seedvr2_dit(upscale.dit_model, "cuda:0")
+    vae = w.load_seedvr2_vae(
+        upscale.vae_model,
+        "cuda:0",
+        encode_tiled=upscale.encode_tiled,
+        encode_tile_size=upscale.encode_tile_size,
+        encode_tile_overlap=upscale.encode_tile_overlap,
+        decode_tiled=upscale.decode_tiled,
+        decode_tile_size=upscale.decode_tile_size,
+        decode_tile_overlap=upscale.decode_tile_overlap,
+        tile_debug="false",
+    )
+
+    out = w.seedvr2_upscaler(
+        img,
+        dit,
+        vae,
+        seed=generate_seed(),
+        resolution=target_res,
+        batch_size=1,
+        color_correction="lab",
+    )
+    # Ensure final output size matches target exactly
+    if extent.target != extent.input:
+        out = w.scale_image(out, extent.target)
+
+    w.send_image(out)
+    return w

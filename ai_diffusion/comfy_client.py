@@ -200,6 +200,7 @@ class ComfyClient(Client):
 
         models.dit_models = nodes.options("SeedVR2LoadDiTModel", "model")
         models.vae_models = nodes.options("SeedVR2LoadVAEModel", "model")
+        models.seedvr2_models = []
 
         loras = nodes.options("LoraLoader", "lora_name")
         available_resources.update(_find_loras(loras))
@@ -221,6 +222,7 @@ class ComfyClient(Client):
 
         checkpoints: dict[str, dict] = {}
         diffusion_models: dict[str, dict] = {}
+        seedvr2: dict[str, dict] = {}
         async for status, result in self.try_inspect("checkpoints"):
             yield status
             checkpoints.update(result)
@@ -230,7 +232,10 @@ class ComfyClient(Client):
         async for status, result in self.try_inspect("unet_gguf"):
             yield status
             diffusion_models.update(result)
-        self._refresh_models(nodes, checkpoints, diffusion_models)
+        async for status, result in self.try_inspect("seedvr2"):
+            yield status
+            seedvr2.update(result)
+        self._refresh_models(nodes, checkpoints, diffusion_models, seedvr2)
 
         # Check supported base models and make sure there is at least one
         self._supported_archs = {ver: self._check_workload(ver) for ver in Arch.list()}
@@ -280,6 +285,7 @@ class ComfyClient(Client):
 
     async def _run_job(self, job: JobInfo):
         workflow = create_workflow(job.work, self.models)
+        log.info(f"DEBUG WORKFLOW: {json.dumps(workflow.root)}")
         if settings.debug_dump_workflow:
             workflow.embed_images().dump(util.log_dir)
 
@@ -476,9 +482,15 @@ class ComfyClient(Client):
         return self._active_job is not None
 
     def _refresh_models(
-        self, nodes: ComfyObjectInfo, checkpoints: dict | None, diffusion_models: dict | None
+        self,
+        nodes: ComfyObjectInfo,
+        checkpoints: dict | None,
+        diffusion_models: dict | None,
+        seedvr2_models: dict | None = None,
     ):
         models = self.models
+        if seedvr2_models:
+            models.seedvr2_models = list(seedvr2_models.keys())
 
         def parse_model_info(models: dict, model_format: FileFormat):
             parsed = (

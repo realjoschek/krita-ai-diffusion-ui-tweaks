@@ -537,10 +537,10 @@ class ComfyWorkflow:
         return self.add_cached("StyleModelLoader", 1, style_model_name=model_name)
 
     def load_seedvr2_dit(self, model: str, device: str):
-        return self.add_cached("SeedVR2LoadDiTModel", 1, model=model, device=device)
+        return self.add("SeedVR2LoadDiTModel", 1, model=model, device=device)
 
     def load_seedvr2_vae(self, model: str, device: str, **kwargs):
-        return self.add_cached("SeedVR2LoadVAEModel", 1, model=model, device=device, **kwargs)
+        return self.add("SeedVR2LoadVAEModel", 1, model=model, device=device, **kwargs)
 
     def seedvr2_upscaler(self, image: Output, dit: Output, vae: Output, **kwargs):
         return self.add("SeedVR2VideoUpscaler", 1, image=image, dit=dit, vae=vae, **kwargs)

@@ -346,7 +346,7 @@ class UpscaleWidget(QWidget):
             with SignalBlocker(self.dit_model_select):
                 self.dit_model_select.clear()
                 for file in client.models.dit_models:
-                    if file in client.models.checkpoints:
+                    if file in client.models.seedvr2_models:
                         self.dit_model_select.addItem(file, file)
                 selected = self.dit_model_select.findData(self.model.upscale.dit_model)
                 self.dit_model_select.setCurrentIndex(max(selected, 0))
@@ -354,7 +354,7 @@ class UpscaleWidget(QWidget):
             with SignalBlocker(self.vae_model_select):
                 self.vae_model_select.clear()
                 for file in client.models.vae_models:
-                    if file in client.models.vae:
+                    if file in client.models.seedvr2_models:
                         self.vae_model_select.addItem(file, file)
                 selected = self.vae_model_select.findData(self.model.upscale.vae_model)
                 self.vae_model_select.setCurrentIndex(max(selected, 0))

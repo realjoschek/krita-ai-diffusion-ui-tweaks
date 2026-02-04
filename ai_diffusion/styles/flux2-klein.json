@@ -1,6 +1,6 @@
 {
     "name": "Flux 2 Klein",
-    "version": 1,
+    "version": 2,
     "architecture": "auto",
     "checkpoints": [
         "flux-2-klein-4b-nvfp4.safetensors",
@@ -14,8 +14,11 @@
     "vae": "Checkpoint Default",
     "clip_skip": 0,
     "v_prediction_zsnr": false,
+    "rescale_cfg": 0.7,
     "self_attention_guidance": false,
     "preferred_resolution": 0,
+    "linked_edit_style": "",
+    "lora_filter": "All",
     "sampler": "Flux 2 - Euler",
     "sampler_steps": 4,
     "cfg_scale": 1.0,

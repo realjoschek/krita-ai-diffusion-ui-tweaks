@@ -223,6 +223,7 @@ class ClientModels:
         self.upscalers: list[str] = []
         self.dit_models: list[str] = []
         self.vae_models: list[str] = []
+        self.seedvr2_models: list[str] = []
         self.node_inputs = ComfyObjectInfo({})
         self.resources: dict[str, str | None] = {}
 

@@ -1,10 +1,10 @@
+from collections.abc import Sequence
 from copy import copy
 from enum import Enum
-from typing import Any, NamedTuple, Sequence, TypeVar, Generic
+from typing import Any, Generic, NamedTuple, TypeVar
 
-from PyQt5.QtCore import QObject, QMetaObject, QUuid, pyqtBoundSignal
+from PyQt5.QtCore import QMetaObject, QObject, QUuid, pyqtBoundSignal
 from PyQt5.QtWidgets import QComboBox
-
 
 T = TypeVar("T")
 
@@ -70,9 +70,8 @@ class PropertyImpl(property):
         signal = getattr(instance, f"{self.name}_changed")
         signal.emit(value)
 
-        if self.persist:
-            if modified_signal := getattr(instance, "modified", None):
-                modified_signal.emit(instance, self.name)
+        if self.persist and (modified_signal := getattr(instance, "modified", None)):
+            modified_signal.emit(instance, self.name)
 
 
 class Binding(NamedTuple):

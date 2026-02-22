@@ -1,17 +1,19 @@
 from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Sequence
 from enum import Enum
 from itertools import chain
-import json
-import hashlib
 from pathlib import Path
-from typing import Any, NamedTuple, Sequence
+from typing import Any, NamedTuple
 
 # Version identifier for all the resources defined here. This is used as the server version.
 # It usually follows the plugin version, but not all new plugin versions also require a server update.
-version = "1.47.0"
+version = "1.48.0"
 
 comfy_url = "https://github.com/comfyanonymous/ComfyUI"
-comfy_version = "cb459573c8fa025bbf9ecf312f6af376d659f567"
+comfy_version = "fe52843fe55b92dedaabff684294dd7a115d2204"
 
 
 class CustomNode(NamedTuple):
@@ -41,15 +43,20 @@ required_custom_nodes = [
         "External Tooling Nodes",
         "comfyui-tooling-nodes",
         "https://github.com/Acly/comfyui-tooling-nodes",
-        "2d395424eaaa9a06a794906f8e8d325f4c850376",
+        "ed99942f861ff63af56c20f8ef4ff473e452c3c6",
         ["ETN_LoadImageCache", "ETN_SaveImageCache", "ETN_Translate"],
     ),
     CustomNode(
         "Inpaint Nodes",
         "comfyui-inpaint-nodes",
         "https://github.com/Acly/comfyui-inpaint-nodes",
-        "b02942210daad35db71f654038cebd541e81fe17",
-        ["INPAINT_LoadFooocusInpaint", "INPAINT_ShrinkMask", "INPAINT_StabilizeMask"],
+        "d74ecec6c377073a6885697f07a019d050f0d545",
+        [
+            "INPAINT_LoadFooocusInpaint",
+            "INPAINT_ShrinkMask",
+            "INPAINT_StabilizeMask",
+            "INPAINT_ColorMatch",
+        ],
     ),
 ]
 
@@ -106,7 +113,7 @@ class Arch(Enum):
             return Arch.sd3
         if string == "flux" and "kontext" in filename:
             return Arch.flux_k
-        if string == "flux" or string == "flux-schnell":
+        if string in {"flux", "flux-schnell"}:
             return Arch.flux
         if string == "flux2_4b" or (string == "flux2" and model_type == "klein-4b"):
             return Arch.flux2_4b
@@ -127,7 +134,7 @@ class Arch(Enum):
             return Arch.qwen_l
         if string == "qwen-image":
             return Arch.qwen
-        if string == "z-image" or string == "zimage":
+        if string in {"z-image", "zimage"}:
             return Arch.zimage
         return None
 
@@ -805,7 +812,7 @@ search_paths: dict[str, list[str]] = {
 }
 # fmt: on
 
-required_resource_ids = set([
+required_resource_ids = {
     ResourceId(ResourceKind.text_encoder, Arch.sd3, "clip_l"),
     ResourceId(ResourceKind.text_encoder, Arch.sd3, "clip_g"),
     ResourceId(ResourceKind.text_encoder, Arch.qwen, "qwen"),
@@ -824,8 +831,6 @@ required_resource_ids = set([
     ResourceId(ResourceKind.lora, Arch.sdxl, "hyper"),
     ResourceId(ResourceKind.upscaler, Arch.all, UpscalerName.default),
     ResourceId(ResourceKind.upscaler, Arch.all, UpscalerName.fast_2x),
-    ResourceId(ResourceKind.upscaler, Arch.all, UpscalerName.fast_3x),
-    ResourceId(ResourceKind.upscaler, Arch.all, UpscalerName.fast_4x),
     ResourceId(ResourceKind.inpaint, Arch.sdxl, "fooocus_head"),
     ResourceId(ResourceKind.inpaint, Arch.sdxl, "fooocus_patch"),
     ResourceId(ResourceKind.inpaint, Arch.all, "default"),
@@ -835,7 +840,7 @@ required_resource_ids = set([
     ResourceId(ResourceKind.vae, Arch.zimage, "default"),
     ResourceId(ResourceKind.vae, Arch.flux2_4b, "default"),
     ResourceId(ResourceKind.vae, Arch.flux2_9b, "default"),
-])
+}
 
 recommended_resource_ids = [
     ResourceId(ResourceKind.controlnet, Arch.sd15, ControlMode.scribble),

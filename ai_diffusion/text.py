@@ -1,14 +1,16 @@
 from __future__ import annotations
+
 import random
 import re
 from pathlib import Path
-from typing import Tuple, List, NamedTuple
+from typing import NamedTuple
 
 from .api import LoraInput
 from .files import FileCollection, FileSource
-from .localization import translate as _
-from .util import client_logger as log
 from .jobs import JobParams
+from .localization import translate as _
+from .util import PluginError
+from .util import client_logger as log
 
 # Functions to convert between position in Python str objects (unicode) and
 # index in QString char16 arrays (used in eg. QTextCursor).
@@ -80,14 +82,14 @@ def extract_loras(prompt: str, lora_files: FileCollection):
             if file.source is not FileSource.unavailable:
                 lora_filename = Path(file.id).stem.lower()
                 lora_normalized = file.name.lower()
-                if input == lora_filename or input == lora_normalized:
+                if input in (lora_filename, lora_normalized):
                     lora_file = file
                     break
 
         if not lora_file:
             error = _("LoRA not found") + f": {input}"
             log.warning(error)
-            raise Exception(error)
+            raise PluginError(error)
 
         lora_strength: float = lora_file.meta("lora_strength", 1.0)
         if match[2]:
@@ -96,7 +98,7 @@ def extract_loras(prompt: str, lora_files: FileCollection):
             except ValueError:
                 error = _("Invalid LoRA strength for") + f" {input}: {lora_strength}"
                 log.warning(error)
-                raise Exception(error)
+                raise ValueError(error)
 
         loras.append(LoraInput(lora_file.id, lora_strength))
         return ""
@@ -139,7 +141,7 @@ def eval_wildcards(text: str, seed: int):
 
 def select_current_parenthesis_block(
     text: str, cursor_pos: int, open_brackets: list[str], close_brackets: list[str]
-) -> Tuple[int, int] | None:
+) -> tuple[int, int] | None:
     """Select the current parenthesis block that the cursor points to."""
     # Ensure cursor position is within valid range
     cursor_pos = max(0, min(cursor_pos, len(text)))
@@ -169,7 +171,7 @@ def select_current_parenthesis_block(
         return None
 
 
-def select_current_word(text: str, cursor_pos: int) -> Tuple[int, int]:
+def select_current_word(text: str, cursor_pos: int) -> tuple[int, int]:
     """Select the word the cursor points to."""
     delimiters = r".,\/!?%^*;:{}=`~()<> " + "\t\r\n"
     start = end = cursor_pos
@@ -185,7 +187,7 @@ def select_current_word(text: str, cursor_pos: int) -> Tuple[int, int]:
     return start, end
 
 
-def select_on_cursor_pos(text: str, cursor_pos: int) -> Tuple[int, int]:
+def select_on_cursor_pos(text: str, cursor_pos: int) -> tuple[int, int]:
     """Return a range in the text based on the cursor_position."""
     return select_current_parenthesis_block(
         text, cursor_pos, ["(", "<"], [")", ">"]
@@ -207,7 +209,7 @@ class ExprNode:
             return f"Expr({self.children}, weight={self.weight})"
 
 
-def parse_expr(expression: str) -> List[ExprNode]:
+def parse_expr(expression: str) -> list[ExprNode]:
     """
     Parses following attention syntax language.
     expr = text | (expr:number)

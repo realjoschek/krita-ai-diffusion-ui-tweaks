@@ -1,27 +1,39 @@
 import asyncio
 import json
 import re
-
-from enum import Enum
+from collections.abc import Awaitable, Callable
 from copy import copy
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, NamedTuple, Literal, TYPE_CHECKING
+from enum import Enum
 from pathlib import Path
-from PyQt5.QtCore import Qt, QObject, QUuid, QAbstractListModel, QSortFilterProxyModel, QModelIndex
-from PyQt5.QtCore import QMetaObject, QTimer, pyqtSignal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
-from .api import WorkflowInput, InpaintContext
-from .client import OutputBatchMode, TextOutput, ClientOutput, JobInfoOutput
-from .comfy_workflow import ComfyWorkflow, ComfyNode
-from .localization import translate as _
+from PyQt5.QtCore import (
+    QAbstractListModel,
+    QMetaObject,
+    QModelIndex,
+    QObject,
+    QSortFilterProxyModel,
+    Qt,
+    QTimer,
+    QUuid,
+    pyqtSignal,
+)
+
+from . import eventloop
+from .api import CustomStyleInput, InpaintContext, WorkflowInput
+from .client import ClientModels, ClientOutput, JobInfoOutput, OutputBatchMode, TextOutput
+from .comfy_workflow import ComfyNode, ComfyWorkflow
 from .connection import Connection, ConnectionState
 from .image import Bounds, Image, Mask
-from .jobs import Job, JobParams, JobQueue, JobKind
-from .properties import Property, ObservableProperties
+from .jobs import Job, JobKind, JobParams, JobQueue
+from .localization import translate as _
+from .properties import ObservableProperties, Property
 from .style import Styles
-from .util import base_type_match, parse_enum, user_data_dir, client_logger as log
 from .ui import theme
-from . import eventloop
+from .util import PluginError, base_type_match, parse_enum, user_data_dir
+from .util import client_logger as log
+from .workflow import sampling_from_style
 
 if TYPE_CHECKING:
     from .layer import LayerManager
@@ -78,7 +90,7 @@ class WorkflowCollection(QAbstractListModel):
                 except Exception as e:
                     log.exception(f"Error loading workflow from {file}: {e}")
 
-            for wf in self._connection.workflows.keys():
+            for wf in self._connection.workflows:
                 self._process_remote_workflow(wf)
 
             self.loaded.emit()
@@ -112,7 +124,7 @@ class WorkflowCollection(QAbstractListModel):
             graph = json.load(f)
             self._process_workflow(file.stem, WorkflowSource.local, graph, file)
 
-    def rowCount(self, parent=QModelIndex()):
+    def rowCount(self, parent: QModelIndex | None = None):
         return len(self._workflows)
 
     def data(self, index: QModelIndex, role: int = 0):
@@ -174,7 +186,7 @@ class WorkflowCollection(QAbstractListModel):
     def overwrite(self, id: str, graph: dict):
         existing = self.find(id)
         if existing is None or existing.source is not WorkflowSource.local or existing.path is None:
-            raise KeyError(f"Workflow {id} cannot be overwritten")
+            raise PluginError(f"Workflow {id} cannot be overwritten")
 
         path = existing.path
         self._folder.mkdir(exist_ok=True)
@@ -190,10 +202,10 @@ class WorkflowCollection(QAbstractListModel):
                     ComfyWorkflow.import_graph(graph, self._node_inputs())
                 except Exception as e:
                     log.exception(f"Error importing workflow graph from {filepath}")
-                    raise RuntimeError(f"This is not a supported workflow file ({e})")
+                    raise PluginError(f"This is not a supported workflow file ({e})")
             return self.save_as(filepath.stem, graph)
         except Exception as e:
-            raise RuntimeError(f"Error importing workflow from {filepath}: {e}")
+            raise PluginError(f"Error importing workflow from {filepath}: {e}")
 
     def find_index(self, id: str):
         for i, wf in enumerate(self._workflows):
@@ -210,7 +222,7 @@ class WorkflowCollection(QAbstractListModel):
     def get(self, id: str):
         result = self.find(id)
         if result is None:
-            raise KeyError(f"Workflow {id} not found")
+            raise PluginError(f"Workflow {id} not found")
         return result
 
     def __getitem__(self, index: int):
@@ -351,9 +363,8 @@ def workflow_parameters(w: ComfyWorkflow):
 
 def _get_choices(w: ComfyWorkflow, node: ComfyNode):
     connected, input_name = next(w.find_connected(node.output()), (None, ""))
-    if connected:
-        if options := w.node_defs.options(connected.type, input_name):
-            return options
+    if connected and (options := w.node_defs.options(connected.type, input_name)):
+        return options
     return None
 
 
@@ -509,7 +520,14 @@ class CustomWorkspace(QObject, ObservableProperties):
                 return str(self.params[param.name])
         return self.workflow_id or "Custom Workflow"
 
-    def collect_parameters(self, layers: "LayerManager", bounds: Bounds, animation=False):
+    def collect_parameters(
+        self,
+        layers: "LayerManager",
+        bounds: Bounds,
+        models: ClientModels,
+        is_live: bool,
+        is_animation: bool,
+    ):
         params = copy(self.params)
         for md in self.metadata:
             param = params.get(md.name)
@@ -520,7 +538,7 @@ class CustomWorkspace(QObject, ObservableProperties):
                 layer = layers.find(QUuid(param))
                 if layer is None:
                     raise ValueError(f"Input layer for parameter {md.name} not found")
-                if animation and layer.is_animated:
+                if is_animation and layer.is_animated:
                     params[md.name] = layer.get_pixel_frames(bounds)
                 else:
                     params[md.name] = layer.get_pixels(bounds)
@@ -530,7 +548,7 @@ class CustomWorkspace(QObject, ObservableProperties):
                 layer = layers.find(QUuid(param))
                 if layer is None:
                     raise ValueError(f"Input layer for parameter {md.name} not found")
-                if animation and layer.is_animated:
+                if is_animation and layer.is_animated:
                     params[md.name] = layer.get_mask_frames(bounds)
                 else:
                     params[md.name] = layer.get_mask(bounds)
@@ -538,7 +556,18 @@ class CustomWorkspace(QObject, ObservableProperties):
                 style = Styles.list().find(str(param))
                 if style is None:
                     raise ValueError(f"Style {param} not found")
-                params[md.name] = style
+                if md.default == "regular":
+                    use_live_sampling = False
+                elif md.default == "live":
+                    use_live_sampling = True
+                else:  # auto
+                    use_live_sampling = is_live
+                params[md.name] = CustomStyleInput(
+                    style.get_models(models.checkpoints),
+                    sampling_from_style(style, 1.0, use_live_sampling),
+                    style.style_prompt,
+                    style.negative_prompt,
+                )
             elif param is None:
                 raise ValueError(f"Parameter {md.name} not found")
 
@@ -609,7 +638,7 @@ class CustomWorkspace(QObject, ObservableProperties):
                     job.params.is_layered = True
 
     def _handle_job_finished(self, job: Job):
-        to_remove = [k for k in self.outputs.keys() if k not in self._new_outputs]
+        to_remove = [k for k in self.outputs if k not in self._new_outputs]
         for key in to_remove:
             del self.outputs[key]
         if len(to_remove) > 0:

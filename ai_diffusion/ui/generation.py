@@ -51,20 +51,6 @@ from ..resources import Arch
 from ..root import root
 from ..settings import settings
 from ..style import Styles
-from ..workflow import FillMode, InpaintMode
-from . import theme
-from .region import RegionPromptWidget
-from .widget import (
-    ErrorBox,
-    GenerateButton,
-    LayerCountWidget,
-    QueueButton,
-    StrengthWidget,
-    StyleSelectWidget,
-    WorkspaceSelectWidget,
-    create_wide_tool_button,
-)
->>>>>>> upstream/main
 from ..util import ensure, flatten, sequence_equal
 from ..workflow import FillMode, InpaintMode
 from . import actions, theme
@@ -79,21 +65,6 @@ from .widget import (
     WorkspaceSelectWidget,
     create_wide_tool_button,
 )
-=======
-from ..workflow import FillMode, InpaintMode
-from . import theme
-from .region import RegionPromptWidget
-from .widget import (
-    ErrorBox,
-    GenerateButton,
-    LayerCountWidget,
-    QueueButton,
-    StrengthWidget,
-    StyleSelectWidget,
-    WorkspaceSelectWidget,
-    create_wide_tool_button,
-)
->>>>>>> upstream/main
 
 
 class HistoryWidget(QListWidget):

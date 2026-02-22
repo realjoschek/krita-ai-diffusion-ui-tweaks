@@ -36,20 +36,6 @@ from .comfy_workflow import (
 )
 from .files import FileFormat, FileLibrary
 from .image import Bounds, Extent, Image, ImageCollection, Mask, multiple_of
-from .resolution import ScaledExtent, ScaleMode, TileLayout, get_inpaint_reference
-from .resources import Arch, ControlMode, ResourceId, ResourceKind, UpscalerName
-from .settings import PerformanceSettings, settings
-from .style import SamplerPresets, Style, StyleSettings
-from .text import eval_wildcards, extract_layers, extract_loras, merge_prompt, strip_prompt_comments
-from .util import ensure, median_or_zero, unique, client_logger as log
->>>>>>> upstream/main
-from .localization import translate as _
-from .resolution import ScaledExtent, ScaleMode, TileLayout, get_inpaint_reference
-from .resources import Arch, ControlMode, ResourceId, ResourceKind, UpscalerName
-from .settings import PerformanceSettings, settings
-from .style import SamplerPresets, Style, StyleSettings
-from .text import eval_wildcards, extract_layers, extract_loras, merge_prompt, strip_prompt_comments
->>>>>>> upstream/main
 from .localization import translate as _
 from .resolution import ScaledExtent, ScaleMode, TileLayout, get_inpaint_reference
 from .resources import Arch, ControlMode, ResourceId, ResourceKind, UpscalerName
@@ -57,14 +43,6 @@ from .settings import PerformanceSettings, settings
 from .style import SamplerPresets, Style, StyleSettings
 from .text import eval_wildcards, extract_layers, extract_loras, merge_prompt, strip_prompt_comments
 from .util import ensure, median_or_zero, unique, client_logger as log
-=======
-from .resolution import ScaledExtent, ScaleMode, TileLayout, get_inpaint_reference
-from .resources import Arch, ControlMode, ResourceId, ResourceKind, UpscalerName
-from .settings import PerformanceSettings, settings
-from .style import SamplerPresets, Style, StyleSettings
-from .text import eval_wildcards, extract_layers, extract_loras, merge_prompt, strip_prompt_comments
-from .util import ensure, median_or_zero, unique, client_logger as log
->>>>>>> upstream/main
 
 
 def detect_inpaint_mode(extent: Extent, area: Bounds):
@@ -1446,7 +1424,6 @@ def upscale_seedvr2(
         image = Image.scale(image, new_extent)
 
     img = w.load_image(image)
-    log.info(f"SeedVR2 Models: DIT={upscale.dit_model}, VAE={upscale.vae_model}")
     dit = w.load_seedvr2_dit(upscale.dit_model, "cuda:0")
     vae = w.load_seedvr2_vae(
         upscale.vae_model,
@@ -1457,6 +1434,7 @@ def upscale_seedvr2(
         decode_tiled=upscale.decode_tiled,
         decode_tile_size=upscale.decode_tile_size,
         decode_tile_overlap=upscale.decode_tile_overlap,
+        tile_debug="false",
     )
 
     out = w.seedvr2_upscaler(

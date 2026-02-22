@@ -138,13 +138,8 @@
     "Describe the content you want to see, or leave empty.": null,
     "Detected base models:": null,
     "Device": null,
-    "Diagnostics Information": null,
->>>>>>> upstream/main
     "DiT Model": null,
     "Diagnostics Information": null,
-=======
-    "Diagnostics Information": null,
->>>>>>> upstream/main
     "Diffusion": null,
     "Diffusion Architecture": null,
     "Diffusion Settings": null,
@@ -328,6 +323,8 @@
     "New layer on top": null,
     "New region": null,
     "No CUDA Devices Found": null,
+    "No DiT model selected for SeedVR2 upscaling.": null,
+    "No VAE model selected for SeedVR2 upscaling.": null,
     "No diffusion model checkpoints found": null,
     "Noise Strength": null,
     "None": null,

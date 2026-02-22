@@ -17,20 +17,6 @@ from PyQt5.QtWidgets import (
 from ..jobs import JobKind
 from ..localization import translate as _
 from ..model import Model, TileOverlapMode, UpscaleMethod
-=======
-    QHBoxLayout,
-    QLabel,
-    QProgressBar,
-    QSlider,
-    QSpinBox,
-    QVBoxLayout,
-    QWidget,
-)
-
->>>>>>> upstream/main
-from ..jobs import JobKind
-from ..localization import translate as _
-from ..model import Model, TileOverlapMode
 from ..properties import Bind, Binding, bind, bind_combo, bind_toggle
 from ..resources import ControlMode, UpscalerName
 from ..root import root
@@ -399,7 +385,7 @@ class UpscaleWidget(QWidget):
         )
 
     def _update_style(self):
-        arch = self.model.arch
+        arch = self._model.arch
         if arch.is_edit:
             tooltip = _("Not supported for edit models")
             self.strength_slider.setEnabled(False)
@@ -421,7 +407,7 @@ class UpscaleWidget(QWidget):
             self.unblur_slider.setToolTip(tooltip)
 
     def _update_prompt(self):
-        self.use_prompt_value.setText(_("On") if self.model.upscale.use_prompt else _("Off"))
+        self.use_prompt_switch.setText(_("On") if self.model.upscale.use_prompt else _("Off"))
         text = self.model.regions.positive
         if len(self.model.regions) > 0:
             text = f"<b>{len(self.model.regions)} " + _("Regions") + f"</b> | {text}"

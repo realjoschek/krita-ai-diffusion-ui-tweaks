@@ -4,59 +4,7 @@ This fork includes several tweaks that save me some clicks here and there and so
 
 In case this won't get implemented in some fashion, I'll try to keep this up to date with the main branch.
 
-The main goals of this project are:
-* **Precision and Control.** Creating entire images from text can be unpredictable.
-  To get the result you envision, you can restrict generation to selections,
-  refine existing content with a variable degree of strength, focus text on image
-  regions, and guide generation with reference images, sketches, line art,
-  depth maps, and more.
-* **Workflow Integration.** Most image generation tools focus heavily on AI parameters.
-  This project aims to be an unobtrusive tool that integrates and synergizes
-  with image editing workflows in Krita. Draw, paint, edit and generate seamlessly without worrying about resolution and technical details.
-* **Local, Open, Free.** We are committed to open source models. Customize presets, bring your
-  own models, and run everything local on your hardware. Cloud generation is also available
-  to get started quickly without heavy investment.  
 
-[![Watch video demo](media/screenshot-video-preview.webp)](https://youtu.be/Ly6USRwTHe0 "Watch video demo")
-
-## <a name="features"></a> Features
-
-* **Inpainting**: Use selections for generative fill, expand, to add or remove objects
-* **Live Painting**: Let AI interpret your canvas in real time for immediate feedback. [Watch Video](https://youtu.be/AF2VyqSApjA?si=Ve5uQJWcNOATtABU)
-* **Upscaling**: Upscale and enrich images to 4k, 8k and beyond without running out of memory.
-* **Diffusion Models**: Supports Stable Diffusion 1.5, XL, Illustrious and Flux models
-* **Edit Models**: Supports Flux Kontext for instruction-based image editing
-* **ControlNet**: Scribble, Line art, Canny edge, Pose, Depth, Normals, Segmentation, +more
-* **IP-Adapter**: Reference images, Style and composition transfer, Face swap
-* **Regions**: Assign individual text descriptions to image areas defined by layers.
-* **Job Queue**: Queue and cancel generation jobs while working on your image.
-* **History**: Preview results and browse previous generations and prompts at any time.
-* **Strong Defaults**: Versatile default style presets allow for a streamlined UI.
-* **Customization**: Create your own presets - custom checkpoints, LoRA, samplers and more.
-
-## <a name="installation"></a> Getting Started
-
-See the [Plugin Installation Guide](https://docs.interstice.cloud/installation) for instructions.
-
-A concise (more technical) version is below:
-
-### Operating System
-
-Windows, Linux, MacOS
-
-#### Hardware support
-
-To run locally a powerful graphics card with at least 6 GB VRAM (NVIDIA) is
-recommended. Otherwise generating images will take very long or may fail due to
-insufficient memory!
-
-<table>
-<tr><td>NVIDIA GPU</td><td>supported via CUDA (Windows/Linux)</td></tr>
-<tr><td>AMD GPU</td><td>supported but requires custom ComfyUI setup</td></tr>
-<tr><td>Apple Silicon</td><td>community support, MPS on macOS 14+</td></tr>
-<tr><td>CPU</td><td>supported, but very slow</td></tr>
-<tr><td>XPU</td><td>supported, may see performance issues (Windows/Linux)</td></tr>
-</table>
 
 ## UI Tweaks
 

@@ -32,16 +32,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
->>>>>>> upstream/main
-from ..connection import ConnectionState, apply_performance_preset
-from ..localization import Localization
 from .. import __version__, eventloop, resources, util
 from ..client import Client, MissingResources, User
 from ..cloud_client import CloudClient
-from ..connection import ConnectionState, apply_performance_preset
-from ..localization import Localization
-=======
->>>>>>> upstream/main
 from ..connection import ConnectionState, apply_performance_preset
 from ..localization import Localization
 from ..localization import translate as _
@@ -49,7 +42,7 @@ from ..properties import Binding
 from ..resources import Arch, ResourceId
 from ..root import collect_diagnostics, root
 from ..server import Server, ServerState
-from ..settings import ImageFileFormat, PerformancePreset, ServerMode, Settings, settings
+from ..settings import ImageFileFormat, PerformancePreset, ServerMode, Setting, Settings, settings
 from ..style import Style
 from ..updates import UpdateState
 from .server import ServerWidget

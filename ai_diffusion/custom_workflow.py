@@ -225,6 +225,10 @@ class WorkflowCollection(QAbstractListModel):
             raise PluginError(f"Workflow {id} not found")
         return result
 
+    @property
+    def is_connected(self):
+        return self._connection.state is ConnectionState.connected
+
     def __getitem__(self, index: int):
         return self._workflows[index]
 
@@ -379,7 +383,7 @@ class CustomGenerationMode(Enum):
 
 class CustomWorkspace(QObject, ObservableProperties):
     workflow_id = Property("", setter="_set_workflow_id")
-    params = Property({}, persist=True)
+    workflow_params = Property({}, persist=True)
     mode = Property(CustomGenerationMode.regular, setter="_set_mode", persist=True)
     is_live = Property(False, setter="toggle_live")
     has_result = Property(False)
@@ -388,8 +392,8 @@ class CustomWorkspace(QObject, ObservableProperties):
     validation_error = Property("")
 
     workflow_id_changed = pyqtSignal(str)
+    workflow_params_changed = pyqtSignal(dict)
     graph_changed = pyqtSignal()
-    params_changed = pyqtSignal(dict)
     mode_changed = pyqtSignal(CustomGenerationMode)
     is_live_changed = pyqtSignal(bool)
     result_available = pyqtSignal(Image)
@@ -414,11 +418,22 @@ class CustomWorkspace(QObject, ObservableProperties):
         self._new_outputs: list[str] = []
         self._switch_workflow_bind: QMetaObject.Connection | None = None
         self._switch_workflow_timer: QTimer | None = None
+        self._embedded_workflow: tuple[str, dict] | None = None
 
         jobs.job_finished.connect(self._handle_job_finished)
         workflows.dataChanged.connect(self._update_workflow)
         workflows.loaded.connect(self._set_default_workflow)
         self._set_default_workflow()
+
+    @property
+    def params(self) -> dict:
+        return self.workflow_params.get(self.workflow_id, {})
+
+    @params.setter
+    def params(self, params: dict):
+        self.workflow_params[self.workflow_id] = params
+        self.workflow_params_changed.emit(self.workflow_params)
+        self.modified.emit(self, "workflow_params")
 
     def _set_default_workflow(self):
         if not self.workflow_id and len(self._workflows) > 0:
@@ -427,6 +442,11 @@ class CustomWorkspace(QObject, ObservableProperties):
             current_index = self._workflows.find_index(self.workflow_id)
             if current_index.isValid():
                 self._update_workflow(current_index, QModelIndex())
+            elif self._embedded_workflow:
+                id, graph = self._embedded_workflow
+                self._embedded_workflow = None
+                self._workflows.add_from_document(id, graph)
+                self.workflow_id = id
 
     def _update_workflow(self, idx: QModelIndex, _: QModelIndex):
         wf = self._workflows[idx.row()]
@@ -458,10 +478,13 @@ class CustomWorkspace(QObject, ObservableProperties):
             self._update_workflow(index, QModelIndex())
 
     def set_graph(self, id: str, graph: dict, document_name: str):
+        self.workflow_id = id
         if self._workflows.find(id) is None:
             id = f"Embedded Workflow ({document_name})"
-            self._workflows.add_from_document(id, graph)
-        self.workflow_id = id
+            self._embedded_workflow = (id, graph)
+            # set embedded workflow now if already connected, otherwise wait for _workflows.loaded
+            if self._workflows.is_connected:
+                self._set_default_workflow()
 
     def import_file(self, filepath: Path):
         self.workflow_id = self._workflows.import_file(filepath)

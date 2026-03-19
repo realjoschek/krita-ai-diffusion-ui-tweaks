@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from itertools import chain
 from typing import Any, ClassVar, cast
 
 from krita import Krita
 from PyQt5.QtCore import QEvent, QMetaObject, QSize, Qt, QUrl, pyqtSignal
 from PyQt5.QtGui import (
     QCloseEvent,
+    QColor,
     QDesktopServices,
     QFontMetrics,
     QGuiApplication,
@@ -17,6 +19,8 @@ from PyQt5.QtGui import (
     QPainter,
     QPaintEvent,
     QPalette,
+    QSyntaxHighlighter,
+    QTextCharFormat,
     QTextCursor,
 )
 from PyQt5.QtWidgets import (
@@ -58,11 +62,16 @@ from ..model import (
 from ..properties import Bind, Binding, bind, bind_combo
 from ..root import root
 from ..settings import Settings, settings
-from ..style import Style, Styles
+from ..style import Style, Styles, sort_recent_styles
 from ..text import (
     char16_index_to_str_index,
     char16_len,
     edit_attention,
+    pattern_comment,
+    pattern_layer,
+    pattern_lora,
+    pattern_weight_expr,
+    pattern_wildcard,
     select_on_cursor_pos,
     str_index_to_char16_index,
 )
@@ -324,14 +333,12 @@ class QueueButton(QToolButton):
 
 
 class StyleSelectWidget(QWidget):
-    _value: Style
-    _styles: list[Style]
-
     value_changed = pyqtSignal(Style)
     quality_changed = pyqtSignal(SamplingQuality)
 
     def __init__(self, parent: QWidget | None, show_quality=False):
         super().__init__(parent)
+        self._styles: list[Style] = []
         self._value = Styles.list().default
 
         layout = QHBoxLayout(self)
@@ -350,39 +357,57 @@ class StyleSelectWidget(QWidget):
             self._quality_combo.currentIndexChanged.connect(self.change_quality)
             layout.addWidget(self._quality_combo, 1)
 
-        settings = QToolButton(self)
-        settings.setIcon(theme.icon("settings"))
-        settings.setAutoRaise(True)
-        settings.clicked.connect(self.show_settings)
-        layout.addWidget(settings)
+        settings_btn = QToolButton(self)
+        settings_btn.setIcon(theme.icon("settings"))
+        settings_btn.setAutoRaise(True)
+        settings_btn.clicked.connect(self.show_settings)
+        layout.addWidget(settings_btn)
 
         Styles.list().changed.connect(self.update_styles)
         Styles.list().name_changed.connect(self.update_styles)
         root.connection.state_changed.connect(self.update_styles)
+        settings.changed.connect(self._on_settings_changed)
 
     def update_styles(self):
         if root.connection.state is not ConnectionState.connected:
             return
         client = root.connection.client_if_connected
-        self._styles = filter_supported_styles(Styles.list().filtered(), client)
-        if self._value not in self._styles:
-            self._styles.insert(0, self._value)
+        filtered = filter_supported_styles(Styles.list().filtered(), client)
+        recent, remaining = sort_recent_styles(
+            filtered, settings.recent_styles, settings.recent_styles_count
+        )
+        if self._value not in chain(recent, remaining):
+            recent.insert(0, self._value)
+        self._styles = recent + remaining
         with SignalBlocker(self._combo):
             self._combo.clear()
-            for style in self._styles:
+            for style in recent:
+                icon = theme.checkpoint_icon(resolve_arch(style, client))
+                self._combo.addItem(icon, f"{style.name} ★", style.filename)
+            if recent and remaining:
+                self._combo.insertSeparator(len(recent))
+            for style in remaining:
                 icon = theme.checkpoint_icon(resolve_arch(style, client))
                 self._combo.addItem(icon, style.name, style.filename)
             self._combo.setCurrentText(self._value.name)
 
     def change_style(self):
-        style = self._styles[self._combo.currentIndex()]
-        if style != self._value:
-            self._value = style
-            self.value_changed.emit(style)
+        filename = self._combo.currentData()
+        if filename is None:
+            return  # separator item selected
+        style = next((s for s in self._styles if s.filename == filename), None)
+        if style is None or style == self._value:
+            return
+        self._value = style
+        self.value_changed.emit(style)
 
     def change_quality(self):
         quality = SamplingQuality(self._quality_combo.currentData())
         self.quality_changed.emit(quality)
+
+    def _on_settings_changed(self, name: str, value: object):
+        if "recent_styles" in name:
+            self.update_styles()
 
     def show_settings(self):
         from .settings import SettingsDialog
@@ -401,6 +426,66 @@ class StyleSelectWidget(QWidget):
                 self.update_styles()
             else:
                 self._combo.setCurrentText(style.name)
+
+
+class PromptHighlighter(QSyntaxHighlighter):
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self._comment_fmt = QTextCharFormat()
+        self._comment_fmt.setForeground(QColor(theme.grey))
+        self._comment_fmt.setFontItalic(True)
+
+        self._weight_fmt = QTextCharFormat()
+        self._weight_fmt.setForeground(QColor(theme.red))
+
+        self._keyword_fmt = QTextCharFormat()
+        self._keyword_fmt.setForeground(QColor(theme.strong_highlight))
+
+        self._grey_fmt = QTextCharFormat()
+        self._grey_fmt.setForeground(QColor(theme.grey))
+
+    def highlightBlock(self, text: str | None):
+        if text is None:
+            return
+        comment_start = len(text)
+        m = pattern_comment.search(text)
+        if m:
+            comment_start = m.start()
+            self.setFormat(m.start(), m.end() - m.start(), self._comment_fmt)
+
+        for m in pattern_weight_expr.finditer(text):
+            if m.start(1) < comment_start:
+                self.setFormat(m.start(), 1, self._grey_fmt)
+                self.setFormat(m.start(1), m.end(1) - m.start(1), self._weight_fmt)
+                self.setFormat(m.end(1), 1, self._grey_fmt)
+
+        for m in pattern_lora.finditer(text):
+            if m.start() < comment_start:
+                # keyword "lora" starts at m.start()+1 (after '<'), length 4
+                self.setFormat(m.start(), 1, self._grey_fmt)
+                self.setFormat(m.start() + 1, 4, self._keyword_fmt)
+                self.setFormat(m.end(1), 1, self._grey_fmt)
+                if m.group(2):
+                    self.setFormat(m.start(2), m.end(2) - m.start(2), self._weight_fmt)
+                    self.setFormat(m.end(2), 1, self._grey_fmt)
+
+        for m in pattern_layer.finditer(text):
+            if m.start() < comment_start:
+                # keyword "layer" starts at m.start()+1 (after '<'), length 5
+                self.setFormat(m.start(), 1, self._grey_fmt)
+                self.setFormat(m.start() + 1, 5, self._keyword_fmt)
+                self.setFormat(m.end(1), 1, self._grey_fmt)
+
+        for m in pattern_wildcard.finditer(text):
+            if m.start() < comment_start:
+                wildcard_text = m.group(0)
+                wildcard_start = m.start()
+                self.setFormat(wildcard_start, 1, self._keyword_fmt)
+                for i, char in enumerate(wildcard_text):
+                    if char == "|":
+                        self.setFormat(wildcard_start + i, 1, self._keyword_fmt)
+                self.setFormat(wildcard_start + len(wildcard_text) - 1, 1, self._keyword_fmt)
 
 
 class ResizeHandle(QWidget):
@@ -458,6 +543,7 @@ class TextPromptWidget(QPlainTextEdit):
         self._completer = PromptAutoComplete(self)
         self.textChanged.connect(self.notify_text_changed)
 
+        self._highlighter = PromptHighlighter(self.document())
         self._resize_handle: ResizeHandle | None = None
 
         palette: QPalette = self.palette()
@@ -913,20 +999,21 @@ class GenerateButton(QPushButton):
         )
         rect = self.rect()
         pixmap = self.icon().pixmap(int(fm.height() * 1.3))
+        pixmap_width = int(pixmap.width() / pixmap.devicePixelRatioF())
         is_hover = int(opt.state) & QStyle.StateFlag.State_MouseOver
         element = QStyle.PrimitiveElement.PE_PanelButtonCommand
-        content_width = fm.width(self._operation) + 5 + pixmap.width()
+        content_width = fm.width(self._operation) + 5 + pixmap_width
         content_rect = rect.adjusted(int(0.5 * (rect.width() - content_width)), 0, 0, 0)
         style.drawPrimitive(element, opt, painter, self)
         style.drawItemPixmap(painter, content_rect, align, pixmap)
-        content_rect = content_rect.adjusted(pixmap.width() + 5, 0, 0, 0)
+        content_rect = content_rect.adjusted(pixmap_width + 5, 0, 0, 0)
         style.drawItemText(painter, content_rect, align, self.palette(), True, self._operation)
 
         cost_width = 0
         if is_hover and self._cost > 0:
             pixmap = self._cost_icon.pixmap(fm.height())
             text_width = fm.width(str(self._cost))
-            cost_width = text_width + 16 + pixmap.width()
+            cost_width = text_width + 16 + pixmap_width
             cost_rect = rect.adjusted(rect.width() - cost_width, 0, 0, 0)
             painter.setOpacity(0.3)
             painter.drawLine(
@@ -941,14 +1028,14 @@ class GenerateButton(QPushButton):
         seed_width = 0
         if is_hover and self.model.fixed_seed:
             pixmap = self._seed_icon.pixmap(fm.height())
-            seed_width = pixmap.width() + 4
+            seed_width = pixmap_width + 4
             seed_rect = rect.adjusted(rect.width() - cost_width - seed_width, 0, 0, 0)
             style.drawItemPixmap(painter, seed_rect, align, pixmap)
 
         if is_hover and self.model.resolution_multiplier != 1.0:
             pixmap = self._resolution_icon.pixmap(fm.height())
             resolution_rect = rect.adjusted(
-                rect.width() - cost_width - seed_width - pixmap.width() - 4, 0, 0, 0
+                rect.width() - cost_width - seed_width - pixmap_width - 4, 0, 0, 0
             )
             style.drawItemPixmap(painter, resolution_rect, align, pixmap)
 
@@ -1101,13 +1188,14 @@ def _paint_tool_drop_down(widget: QToolButton, text: str | None = None):
     )
     rect = widget.rect()
     pixmap = widget.icon().pixmap(int(rect.height() * 0.75))
+    pixmap_width = int(pixmap.width() / pixmap.devicePixelRatioF())
     element = QStyle.PrimitiveElement.PE_Widget
     if int(opt.state) & QStyle.StateFlag.State_MouseOver:
         element = QStyle.PrimitiveElement.PE_PanelButtonCommand
     style.drawPrimitive(element, opt, painter, widget)
     style.drawItemPixmap(painter, rect.adjusted(4, 0, 0, 0), align, pixmap)
     if text:
-        text_rect = rect.adjusted(pixmap.width() + 4, 0, 0, 0)
+        text_rect = rect.adjusted(pixmap_width + 4, 0, 0, 0)
         style.drawItemText(painter, text_rect, align, widget.palette(), True, text)
     painter.translate(int(0.5 * rect.width() - 10), 0)
     style.drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorArrowDown, opt, painter)

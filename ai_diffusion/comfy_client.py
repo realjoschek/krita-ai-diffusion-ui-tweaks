@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import struct
 import uuid
 from collections.abc import Iterable, Sequence
@@ -55,10 +56,18 @@ from .websockets.src import websockets
 from .workflow import create as create_workflow
 
 if platform_tools.is_macos:
-    import os
 
     if "SSL_CERT_FILE" not in os.environ:
         os.environ["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
+
+
+def _preview_method() -> str:
+    method = settings.preview_method.strip().lower() if settings.preview_method else "auto"
+    env_method = os.getenv("KRITA_AI_DIFFUSION_PREVIEW_METHOD", "").strip().lower()
+    # Backward compatibility: let env var override only while menu setting remains default.
+    if method in ("", "auto") and env_method:
+        method = env_method
+    return method or "auto"
 
 
 @dataclass
@@ -324,6 +333,7 @@ class ComfyClient(Client):
             "prompt": workflow.root,
             "client_id": self._id,
             "prompt_id": job.id,
+            "extra_data": {"preview_method": _preview_method()},
         }
         self._waiting_job.set(job)
         try:
@@ -362,13 +372,19 @@ class ComfyClient(Client):
         progress: Progress | None = None
         images = ImageCollection()
         last_images = ImageCollection()
+        preview_image: Image | None = None
+        last_preview_image: Image | None = None
         result = None
 
         async for msg in websocket:
             if isinstance(msg, bytes):
                 image = _extract_message_png_image(memoryview(msg))
                 if image is not None:
-                    images.append(image)
+                    preview_image = image
+                    if self._active_job is not None:
+                        await self._report(
+                            ClientEvent.preview, self._active_job.id, images=ImageCollection([image])
+                        )
 
             elif isinstance(msg, str):
                 msg = json.loads(msg)
@@ -382,6 +398,7 @@ class ComfyClient(Client):
                     if self._active_job is not None:
                         progress = Progress(self._active_job)
                         images = ImageCollection()
+                        preview_image = None
                         result = None
 
                 if msg["type"] == "execution_interrupted":
@@ -395,6 +412,10 @@ class ComfyClient(Client):
                         if len(images) == 0:
                             # It may happen if the entire execution is cached and no images are sent.
                             images = last_images
+                        if len(images) == 0 and preview_image is not None:
+                            images = ImageCollection([preview_image])
+                        if len(images) == 0 and last_preview_image is not None:
+                            images = ImageCollection([last_preview_image])
                         if len(images) == 0:
                             # Still no images. Potential scenario: execution cached, but previous
                             # generation happened before the client was connected.
@@ -402,6 +423,8 @@ class ComfyClient(Client):
                             await self._report(ClientEvent.error, job_id, error=err)
                         else:
                             last_images = images
+                            if preview_image is not None:
+                                last_preview_image = preview_image
                             await self._report(
                                 ClientEvent.finished, job_id, 1, images=images, result=result
                             )
@@ -899,9 +922,21 @@ def _extract_message_png_image(data: memoryview):
     s = struct.calcsize(">II")
     if len(data) > s:
         event, format = struct.unpack_from(">II", data)
-        # ComfyUI server.py: BinaryEventTypes.PREVIEW_IMAGE=1
-        if event == 1 and format == 2:  # format: JPEG=1, PNG=2
+        if event == 1 and format in (1, 2):  # PREVIEW_IMAGE, JPEG=1 PNG=2
             return Image.from_bytes(data[s:])
+        if event == 4:  # PREVIEW_IMAGE_WITH_METADATA
+            p = s
+            if len(data) < p + 4:
+                return None
+            meta_len = struct.unpack_from(">I", data, p)[0]
+            p += 4
+            if len(data) < p + meta_len + 4:
+                return None
+            p += meta_len
+            image_format = struct.unpack_from(">I", data, p)[0]
+            p += 4
+            if image_format in (1, 2):
+                return Image.from_bytes(data[p:])
     return None
 
 

@@ -174,6 +174,22 @@ class Settings(QObject):
         _("Enable Automatic Updates"), True, _("Check for new versions of the plugin on startup")
     )
 
+    preview_method: str
+    _preview_method = Setting(
+        _("Preview Method Hint"),
+        "auto",
+        _(
+            "Hint sent to ComfyUI for intermediate preview decoding (for example: auto, taesd, latent2rgb)"
+        ),
+    )
+
+    skipped_plugin_update: str
+    _skipped_plugin_update = Setting(
+        _("Skipped Plugin Update Version"),
+        "",
+        _("Plugin version to ignore in automatic update prompts until a newer version is available"),
+    )
+
     server_mode: ServerMode
     _server_mode = Setting(
         _("Server Management"),

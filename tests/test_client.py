@@ -14,7 +14,8 @@ from ai_diffusion.api import (
     WorkflowKind,
 )
 from ai_diffusion.client import ClientEvent, resolve_arch
-from ai_diffusion.comfy_client import ComfyClient, parse_url, websocket_url
+from ai_diffusion.comfy_client import ComfyClient, _preview_method, parse_url, websocket_url
+from ai_diffusion.settings import settings
 from ai_diffusion.files import File, FileFormat, FileLibrary
 from ai_diffusion.image import Extent
 from ai_diffusion.network import NetworkError
@@ -146,6 +147,20 @@ def test_disconnect(qtapp, comfy_server: Server):
 def test_parse_url(url, expected_http, expected_ws):
     parsed = parse_url(url)
     assert parsed == expected_http and websocket_url(parsed) == expected_ws
+
+
+def test_preview_method_resolution(monkeypatch):
+    original_method = settings.preview_method
+    try:
+        settings.preview_method = "auto"
+        monkeypatch.setenv("KRITA_AI_DIFFUSION_PREVIEW_METHOD", "taesd")
+        assert _preview_method() == "taesd"
+
+        settings.preview_method = "latent2rgb"
+        monkeypatch.setenv("KRITA_AI_DIFFUSION_PREVIEW_METHOD", "taesd")
+        assert _preview_method() == "latent2rgb"
+    finally:
+        settings.preview_method = original_method
 
 
 def check_client_info(client: ComfyClient):

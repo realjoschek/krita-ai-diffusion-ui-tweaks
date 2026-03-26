@@ -40,6 +40,7 @@ class ClientEvent(Enum):
     published = 8
     output = 9
     payment_required = 10
+    preview = 11
 
 
 class TextOutput(NamedTuple):

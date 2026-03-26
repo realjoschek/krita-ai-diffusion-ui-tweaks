@@ -708,6 +708,7 @@ class InterfaceSettings(SettingsTab):
 
         S = Settings
         self.add("language", ComboBoxSetting(S._language, parent=self))
+        self.add("preview_method", ComboBoxSetting(S._preview_method, parent=self))
         self.add("prompt_translation", ComboBoxSetting(S._prompt_translation, parent=self))
         self.add("prompt_line_count", SpinBoxSetting(S._prompt_line_count, self, 1, 10))
         self.add(
@@ -757,6 +758,14 @@ class InterfaceSettings(SettingsTab):
 
         languages = [(lang.name, lang.id) for lang in Localization.available]
         self._widgets["language"].set_items(languages)
+
+        preview_methods = [
+            (_("Automatic"), "auto"),
+            ("TAESD", "taesd"),
+            ("Latent2RGB", "latent2rgb"),
+        ]
+        self._widgets["preview_method"].set_items(preview_methods)
+
         self.update_translation(root.connection.client_if_connected)
 
         for w in ["apply_region_behavior", "apply_region_behavior_live"]:

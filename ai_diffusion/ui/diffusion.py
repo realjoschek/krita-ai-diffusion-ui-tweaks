@@ -45,12 +45,17 @@ class AutoUpdateWidget(QWidget):
         self._update_button.setMinimumHeight(32)
         self._update_button.clicked.connect(self._run_update)
 
+        self._skip_button = QPushButton(_("Skip this version"), self)
+        self._skip_button.setMinimumHeight(32)
+        self._skip_button.clicked.connect(self._skip_version)
+
         update_layout = QVBoxLayout()
         update_layout.addWidget(update_message)
         update_layout.addWidget(self._update_status)
         update_layout.addWidget(self._update_error)
         update_layout.addWidget(self._update_checkbox)
         update_layout.addWidget(self._update_button)
+        update_layout.addWidget(self._skip_button)
         self.setLayout(update_layout)
 
         root.auto_update.latest_version_changed.connect(self.update_content)
@@ -66,28 +71,50 @@ class AutoUpdateWidget(QWidget):
             case UpdateState.checking:
                 self._update_status.setText(_("Checking for updates..."))
                 self._update_button.setEnabled(False)
+                self._skip_button.setEnabled(False)
+                self._skip_button.setVisible(False)
             case UpdateState.available:
                 self._update_status.setText(_("Latest version") + f": {au.latest_version}")
                 self._update_button.setEnabled(True)
+                self._skip_button.setEnabled(True)
+                self._skip_button.setVisible(True)
             case UpdateState.downloading:
                 self._update_status.setText(_("Downloading package..."))
                 self._update_button.setEnabled(False)
+                self._skip_button.setEnabled(False)
+                self._skip_button.setVisible(False)
             case UpdateState.installing:
                 self._update_status.setText(_("Installing new version..."))
                 self._update_button.setEnabled(False)
+                self._skip_button.setEnabled(False)
+                self._skip_button.setVisible(False)
             case UpdateState.failed_update:
                 self._update_status.setText(_("Update failed"))
                 self._update_error.setText(au.error)
                 self._update_button.setEnabled(True)
+                self._skip_button.setEnabled(False)
+                self._skip_button.setVisible(False)
             case UpdateState.restart_required:
                 self._update_status.setText(_("Please restart Krita to complete the update!"))
                 self._update_button.setEnabled(False)
+                self._skip_button.setEnabled(False)
+                self._skip_button.setVisible(False)
+            case _:
+                self._skip_button.setEnabled(False)
+                self._skip_button.setVisible(False)
 
         self.setVisible(self.is_visible)
 
     @property
     def is_visible(self):
-        return settings.auto_update and root.auto_update.state not in [
+        if not settings.auto_update:
+            return False
+        if (
+            root.auto_update.state is UpdateState.available
+            and root.auto_update.latest_version == settings.skipped_plugin_update
+        ):
+            return False
+        return root.auto_update.state not in [
             UpdateState.latest,
             UpdateState.failed_check,
             UpdateState.checking,
@@ -99,7 +126,16 @@ class AutoUpdateWidget(QWidget):
         root.auto_update.state_changed.emit(root.auto_update.state)
 
     def _run_update(self):
+        settings.skipped_plugin_update = ""
+        settings.save()
         root.auto_update.run()
+
+    def _skip_version(self):
+        au = root.auto_update
+        if au.state is UpdateState.available and au.latest_version:
+            settings.skipped_plugin_update = au.latest_version
+            settings.save()
+            root.auto_update.state_changed.emit(au.state)
 
 
 class ConnectionWidget(QWidget):

@@ -52,6 +52,27 @@ def test_save():
     )
 
 
+def test_fork_settings_defaults():
+    s = Settings()
+    assert s.preview_method == "auto"
+    assert s.skipped_plugin_update == ""
+
+
+def test_fork_settings_save_roundtrip():
+    original = Settings()
+    original.preview_method = "taesd"
+    original.skipped_plugin_update = "v1.48.0"
+
+    result = Settings()
+    with TemporaryDirectory(dir=Path(__file__).parent) as dir:
+        filepath = Path(dir) / "test_fork_settings.json"
+        original.save(filepath)
+        result.load(filepath)
+
+    assert result.preview_method == "taesd"
+    assert result.skipped_plugin_update == "v1.48.0"
+
+
 def test_performance_preset():
     s = Settings()
     s.performance_preset = PerformancePreset.low

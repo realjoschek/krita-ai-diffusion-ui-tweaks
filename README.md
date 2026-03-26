@@ -21,6 +21,10 @@ In case this won't get implemented in some fashion, I'll try to keep this up to 
 *   **SeedVR2 Upscaling**: upscaling using SeedVR2. Important: For now you need to install [https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler) by hand to use this.
 *   **Upscaling Noise Injection**: Added an option in the Upscale workspace to inject random noise into the image before running the upscale model. This can help fix some blurryness with some upscales.
 
+## Others
+
+*   **Live Preview**: Merged in live preview feature from this fork: https://github.com/hdworkstation103/krita-ai-diffusion 
+
 
 ## Installation
 

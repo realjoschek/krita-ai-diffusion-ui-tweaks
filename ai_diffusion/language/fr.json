@@ -610,5 +610,9 @@
     "Legacy Upscaling": null,
     "Encode Tiled": null,
     "No DiT model selected for SeedVR2 upscaling.": null
+    "Switch to generate mode": null,
+    "Recent Styles": null,
+    "Switch to edit mode": null,
+    "Number of most recently used styles to show at the top of the style list": null
   }
 }

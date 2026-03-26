@@ -1043,9 +1043,21 @@ class Model(QObject, ObservableProperties):
             image = Image.crop(image, Bounds(0, 0, *Extent.min(bounds.extent, image.extent)))
 
         if self._use_overlay_preview and not self._overlay_failed:
+            import sip
+            if self._overlay is not None and sip.isdeleted(self._overlay):
+                self._overlay = None
+                
             if self._overlay is None:
                 self._overlay = _CanvasPreviewOverlay(self.document)
-            if self._overlay.show_preview(image, bounds, self.document.extent):
+            
+            try:
+                success = self._overlay.show_preview(image, bounds, self.document.extent)
+            except RuntimeError:
+                # The C++ widget was deleted by Krita (e.g. tab closed or viewport recreated)
+                self._overlay = _CanvasPreviewOverlay(self.document)
+                success = self._overlay.show_preview(image, bounds, self.document.extent)
+
+            if success:
                 if self._layer is not None:
                     self._layer.hide()
                 return
@@ -1053,7 +1065,10 @@ class Model(QObject, ObservableProperties):
                 self._overlay_failed = True
 
         if self._overlay is not None:
-            self._overlay.hide_preview()
+            try:
+                self._overlay.hide_preview()
+            except RuntimeError:
+                self._overlay = None
 
         if self._layer and self._layer.was_removed:
             self._layer = None
@@ -1067,7 +1082,14 @@ class Model(QObject, ObservableProperties):
 
     def hide_preview(self, delete_layer=False):
         if self._overlay is not None:
-            self._overlay.hide_preview()
+            import sip
+            if sip.isdeleted(self._overlay):
+                self._overlay = None
+            else:
+                try:
+                    self._overlay.hide_preview()
+                except RuntimeError:
+                    self._overlay = None
         if self._layer is not None:
             if delete_layer:
                 self._layer.remove()
@@ -1199,9 +1221,23 @@ class Model(QObject, ObservableProperties):
             self._layer.remove()
             self._layer = None
         if self._overlay is not None:
-            self._overlay.hide_preview()
+            import sip
+            if sip.isdeleted(self._overlay):
+                self._overlay = None
+            else:
+                try:
+                    self._overlay.hide_preview()
+                except RuntimeError:
+                    self._overlay = None
         if self._overlay is not None:
-            self._overlay.hide_preview()
+            import sip
+            if sip.isdeleted(self._overlay):
+                self._overlay = None
+            else:
+                try:
+                    self._overlay.hide_preview()
+                except RuntimeError:
+                    self._overlay = None
         self.jobs.selection = []
         self.jobs.notify_used(job_id, index)
         self.jobs.notify_favorite(job_id, index, True)
@@ -1238,9 +1274,23 @@ class Model(QObject, ObservableProperties):
             self._layer.remove()
             self._layer = None
         if self._overlay is not None:
-            self._overlay.hide_preview()
+            import sip
+            if sip.isdeleted(self._overlay):
+                self._overlay = None
+            else:
+                try:
+                    self._overlay.hide_preview()
+                except RuntimeError:
+                    self._overlay = None
         if self._overlay is not None:
-            self._overlay.hide_preview()
+            import sip
+            if sip.isdeleted(self._overlay):
+                self._overlay = None
+            else:
+                try:
+                    self._overlay.hide_preview()
+                except RuntimeError:
+                    self._overlay = None
         self.apply_result(
             job.results[0],
             job.params,

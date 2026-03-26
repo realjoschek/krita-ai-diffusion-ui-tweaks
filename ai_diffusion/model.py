@@ -292,7 +292,20 @@ class _CanvasPreviewOverlay(QWidget):
             win = Krita.instance().activeWindow()
             if win is None:
                 return QRect()
+            
             view = win.activeView()
+            # If we have a document, try to find the correct view
+            if self._document is not None and hasattr(self._document, '_id'):
+                target_id = self._document._id
+                for v in win.views():
+                    vd = v.document()
+                    if vd is not None:
+                        vd_id = vd.annotation("ai_diffusion/document_id")
+                        if vd_id and vd_id.size() > 0:
+                            if str(vd_id.data(), "utf-8") == target_id:
+                                view = v
+                                break
+
             if view is None:
                 return QRect()
 

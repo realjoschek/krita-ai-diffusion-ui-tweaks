@@ -13,8 +13,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, NamedTuple
 
-from PyQt5.QtCore import QMetaObject, QObject, Qt, QUuid, pyqtSignal
+from PyQt5.QtCore import QMetaObject, QObject, Qt, QUuid, pyqtSignal, QRect, QRectF, QPointF, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter
+from PyQt5.QtWidgets import QWidget
+import os
 
 from . import eventloop, util, workflow
 from .api import (
@@ -118,6 +120,239 @@ class Error(NamedTuple):
 no_error = Error(ErrorKind.none, "")
 
 
+class _CanvasPreviewOverlay(QWidget):
+    """Experimental preview overlay painted over the canvas widget."""
+
+    def __init__(self):
+        super().__init__(None)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.hide()
+        self._image: Image | None = None
+        self._bounds: Bounds | None = None
+        self._doc_extent: Extent | None = None
+        self._target_rect = QRect()
+        self._anchor_widget: QWidget | None = None
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(33)  # ~30 FPS viewport tracking
+        self._sync_timer.timeout.connect(self._sync_overlay)
+        self._syncing = False
+
+    def show_preview(self, image: Image, bounds: Bounds, doc_extent: Extent) -> bool:
+        host, anchor = self._find_canvas_host_and_anchor()
+        if host is None:
+            return False
+        if self.parentWidget() is not host:
+            self.setParent(host)
+        if self.geometry() != host.rect():
+            self.setGeometry(host.rect())
+        self._anchor_widget = anchor
+        self._image = image
+        self._bounds = bounds
+        self._doc_extent = doc_extent
+        self._target_rect = self._map_bounds_to_canvas(bounds)
+        if self._target_rect.width() <= 0 or self._target_rect.height() <= 0:
+            self._target_rect = self._fallback_target(bounds, doc_extent)
+        self.show()
+        self.update()
+        if not self._sync_timer.isActive():
+            self._sync_timer.start()
+        return True
+
+    def hide_preview(self):
+        if self._sync_timer.isActive():
+            self._sync_timer.stop()
+        self.hide()
+        self._image = None
+        self._bounds = None
+        self._doc_extent = None
+        self._target_rect = QRect()
+        self._anchor_widget = None
+
+    def _sync_overlay(self):
+        if self._syncing or self._image is None or self._bounds is None or self._doc_extent is None:
+            return
+        self._syncing = True
+        try:
+            host, anchor = self._find_canvas_host_and_anchor()
+            if host is None:
+                return
+            if self.parentWidget() is not host:
+                self.setParent(host)
+            if self.geometry() != host.rect():
+                self.setGeometry(host.rect())
+            self._anchor_widget = anchor
+
+            rect = self._map_bounds_to_canvas(self._bounds)
+            if rect.width() <= 0 or rect.height() <= 0:
+                rect = self._fallback_target(self._bounds, self._doc_extent)
+            if rect != self._target_rect:
+                self._target_rect = rect
+                self.update()
+        finally:
+            self._syncing = False
+
+    def _find_canvas_host_and_anchor(self) -> tuple[QWidget | None, QWidget | None]:
+        from krita import Krita  # type: ignore
+
+        win = Krita.instance().activeWindow()
+        if win is None:
+            return None, None
+        anchor: QWidget | None = None
+        view = win.activeView()
+        if view is not None and view.canvas() is not None:
+            obj = view.canvas()
+            # First non-window QWidget in canvas hierarchy.
+            while obj is not None:
+                if isinstance(obj, QWidget) and not obj.isWindow():
+                    anchor = obj
+                    break
+                obj = obj.parent()
+        # Prefer hosting directly on the canvas viewport to keep drawing clipped to canvas area.
+        qwin = win.qwindow()
+        if qwin is not None:
+            if anchor is None:
+                preferred = [
+                    w
+                    for w in qwin.findChildren(QWidget)
+                    if (
+                        w.isVisible()
+                        and not w.isWindow()
+                        and w is not self
+                        and w.width() > 200
+                        and w.height() > 200
+                        and w.metaObject().className() in ("Viewport", "KisOpenGLCanvas2")
+                    )
+                ]
+                if preferred:
+                    preferred.sort(key=lambda w: w.width() * w.height(), reverse=True)
+                    anchor = preferred[0]
+
+            if anchor is None:
+                # Heuristic fallback: pick a large visible child likely to be the canvas viewport.
+                children = [
+                    w
+                    for w in qwin.findChildren(QWidget)
+                    if (
+                        w.isVisible()
+                        and not w.isWindow()
+                        and w is not self
+                        and w.width() > 200
+                        and w.height() > 200
+                    )
+                ]
+                if children:
+                    candidates = sorted(
+                        (
+                            w
+                            for w in children
+                            if w is not qwin and w.width() <= qwin.width() and w.height() <= qwin.height()
+                        ),
+                        key=lambda w: w.width() * w.height(),
+                        reverse=True,
+                    )
+                    if candidates:
+                        anchor = candidates[0]
+            if anchor is not None:
+                return anchor, anchor
+            return qwin, None
+        if anchor is not None:
+            return anchor, anchor
+        return None, None
+
+    def paintEvent(self, _event):
+        if self._image is None:
+            return
+        rect = self._target_rect.intersected(self.rect())
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.setOpacity(0.75)
+        painter.drawPixmap(rect, self._image.to_pixmap())
+
+    def _map_bounds_to_canvas(self, bounds: Bounds) -> QRect:
+        try:
+            from krita import Krita  # type: ignore
+
+            win = Krita.instance().activeWindow()
+            if win is None:
+                return QRect()
+            view = win.activeView()
+            if view is None:
+                return QRect()
+
+            f2c = view.flakeToCanvasTransform()
+            zoom_factor = 1.0
+            f2i = None
+            try:
+                f2i = view.flakeToImageTransform()
+                if f2i is not None and abs(f2i.m11()) > 1e-6 and abs(f2i.m22()) > 1e-6:
+                    # flake->image is inverse of visual canvas zoom in the common case.
+                    zx = 1.0 / float(f2i.m11())
+                    zy = 1.0 / float(f2i.m22())
+                    zoom_factor = (abs(zx) + abs(zy)) * 0.5
+            except Exception:
+                zoom_factor = 1.0
+
+            r = QRectF(bounds.x, bounds.y, bounds.width, bounds.height)
+            pts = [
+                f2c.map(QPointF(r.left(), r.top())),
+                f2c.map(QPointF(r.right(), r.top())),
+                f2c.map(QPointF(r.left(), r.bottom())),
+                f2c.map(QPointF(r.right(), r.bottom())),
+            ]
+            xs = [p.x() for p in pts]
+            ys = [p.y() for p in pts]
+            x0, x1 = min(xs), max(xs)
+            y0, y1 = min(ys), max(ys)
+            # Krita's flakeToCanvasTransform can be unscaled (m11/m22 ~ 1.0), while
+            # effective zoom is represented in flakeToImageTransform.
+            if abs(f2c.m11() - 1.0) < 1e-3 and abs(f2c.m22() - 1.0) < 1e-3 and abs(zoom_factor - 1.0) > 1e-3:
+                origin = f2c.map(QPointF(0.0, 0.0))
+                ox, oy = origin.x(), origin.y()
+                x0 = ox + (x0 - ox) * zoom_factor
+                x1 = ox + (x1 - ox) * zoom_factor
+                y0 = oy + (y0 - oy) * zoom_factor
+                y1 = oy + (y1 - oy) * zoom_factor
+            rect = QRect(
+                int(round(x0)),
+                int(round(y0)),
+                max(1, int(round(x1 - x0))),
+                max(1, int(round(y1 - y0))),
+            )
+            # Transform from anchor-widget coordinates into overlay-parent coordinates.
+            host = self.parentWidget()
+            anchor = self._anchor_widget
+            if host is not None and anchor is not None and anchor is not host:
+                top_left = anchor.mapTo(host, rect.topLeft())
+                bottom_right = anchor.mapTo(host, rect.bottomRight())
+                rect = QRect(top_left, bottom_right).normalized()
+                if rect.width() <= 0 or rect.height() <= 0:
+                    return QRect()
+            # Sanity guard: mapped area shouldn't exceed viewport absurdly.
+            if rect.width() > self.width() * 4 or rect.height() > self.height() * 4:
+                return QRect()
+            return rect
+        except Exception:
+            return QRect()
+
+    def _fallback_target(self, bounds: Bounds, extent: Extent) -> QRect:
+        if extent.width <= 0 or extent.height <= 0:
+            return QRect()
+        sx = self.width() / extent.width
+        sy = self.height() / extent.height
+        return QRect(
+            int(round(bounds.x * sx)),
+            int(round(bounds.y * sy)),
+            max(1, int(round(bounds.width * sx))),
+            max(1, int(round(bounds.height * sy))),
+        )
+
+
+
 class Model(QObject, ObservableProperties):
     """Represents diffusion workflows for a specific Krita document. Stores all inputs related to
     image generation. Launches generation jobs. Listens to server messages and keeps a
@@ -164,6 +399,11 @@ class Model(QObject, ObservableProperties):
         self._doc = document
         self._connection = connection
         self._layer: Layer | None = None
+        self._overlay: _CanvasPreviewOverlay | None = None
+        self._overlay_failed = False
+        self._use_overlay_preview = True
+
+
         self.generate_seed()
         self.jobs = JobQueue()
         self.regions = RootRegion(self)
@@ -717,6 +957,12 @@ class Model(QObject, ObservableProperties):
             self.jobs.notify_started(job)
             self.progress_kind = ProgressKind.generation
             self.progress = message.progress
+            if message.images and len(message.images) > 0:
+                self.show_preview_image(job, message.images[0])
+        elif message.event is ClientEvent.preview:
+            self.jobs.notify_started(job)
+            if job.kind is not JobKind.live_preview and message.images and len(message.images) > 0:
+                self.show_preview_image(job, message.images[0])
         elif message.event is ClientEvent.upload:
             self.jobs.notify_started(job)
             self.progress_kind = ProgressKind.upload
@@ -771,16 +1017,32 @@ class Model(QObject, ObservableProperties):
     def show_preview(self, job_id: str, index: int, name_prefix="Preview"):
         job = self.jobs.find(job_id)
         assert job is not None, "Cannot show preview, invalid job id"
+        self.show_preview_image(job, job.results[index], name_prefix)
+
+    def show_preview_image(self, job: Job, image: Image, name_prefix="Preview"):
         if job.kind is JobKind.animation:
-            return  # don't show animation preview on canvas (it's slow and clumsy)
+            return
 
         name = f"[{name_prefix}] {trim_text(job.params.name, 77)}"
-        image = job.results[index]
         bounds = job.params.bounds
         if image.extent != bounds.extent:
             image = Image.crop(image, Bounds(0, 0, *Extent.min(bounds.extent, image.extent)))
+
+        if self._use_overlay_preview and not self._overlay_failed:
+            if self._overlay is None:
+                self._overlay = _CanvasPreviewOverlay()
+            if self._overlay.show_preview(image, bounds, self.document.extent):
+                if self._layer is not None:
+                    self._layer.hide()
+                return
+            else:
+                self._overlay_failed = True
+
+        if self._overlay is not None:
+            self._overlay.hide_preview()
+
         if self._layer and self._layer.was_removed:
-            self._layer = None  # layer was removed by user
+            self._layer = None
         if self._layer is not None:
             self._layer.name = name
             self._layer.write_pixels(image, bounds)
@@ -790,6 +1052,8 @@ class Model(QObject, ObservableProperties):
             self._layer.is_locked = True
 
     def hide_preview(self, delete_layer=False):
+        if self._overlay is not None:
+            self._overlay.hide_preview()
         if self._layer is not None:
             if delete_layer:
                 self._layer.remove()
@@ -920,6 +1184,10 @@ class Model(QObject, ObservableProperties):
         if self._layer:
             self._layer.remove()
             self._layer = None
+        if self._overlay is not None:
+            self._overlay.hide_preview()
+        if self._overlay is not None:
+            self._overlay.hide_preview()
         self.jobs.selection = []
         self.jobs.notify_used(job_id, index)
         self.jobs.notify_favorite(job_id, index, True)
@@ -955,6 +1223,10 @@ class Model(QObject, ObservableProperties):
         if self._layer:
             self._layer.remove()
             self._layer = None
+        if self._overlay is not None:
+            self._overlay.hide_preview()
+        if self._overlay is not None:
+            self._overlay.hide_preview()
         self.apply_result(
             job.results[0],
             job.params,

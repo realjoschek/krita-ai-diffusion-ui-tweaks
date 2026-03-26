@@ -123,8 +123,9 @@ no_error = Error(ErrorKind.none, "")
 class _CanvasPreviewOverlay(QWidget):
     """Experimental preview overlay painted over the canvas widget."""
 
-    def __init__(self):
+    def __init__(self, document=None):
         super().__init__(None)
+        self._document = document
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -199,8 +200,17 @@ class _CanvasPreviewOverlay(QWidget):
         win = Krita.instance().activeWindow()
         if win is None:
             return None, None
-        anchor: QWidget | None = None
+        
         view = win.activeView()
+        
+        # If we have a document, try to find the correct view
+        if self._document is not None and getattr(self._document, 'filename', None):
+            for v in win.views():
+                if v.document() and v.document().fileName() == self._document.filename:
+                    view = v
+                    break
+
+        anchor: QWidget | None = None
         if view is not None and view.canvas() is not None:
             obj = view.canvas()
             # First non-window QWidget in canvas hierarchy.
@@ -247,7 +257,9 @@ class _CanvasPreviewOverlay(QWidget):
                         (
                             w
                             for w in children
-                            if w is not qwin and w.width() <= qwin.width() and w.height() <= qwin.height()
+                            if w is not qwin
+                            and w.width() <= qwin.width()
+                            and w.height() <= qwin.height()
                         ),
                         key=lambda w: w.width() * w.height(),
                         reverse=True,
@@ -310,7 +322,11 @@ class _CanvasPreviewOverlay(QWidget):
             y0, y1 = min(ys), max(ys)
             # Krita's flakeToCanvasTransform can be unscaled (m11/m22 ~ 1.0), while
             # effective zoom is represented in flakeToImageTransform.
-            if abs(f2c.m11() - 1.0) < 1e-3 and abs(f2c.m22() - 1.0) < 1e-3 and abs(zoom_factor - 1.0) > 1e-3:
+            if (
+                abs(f2c.m11() - 1.0) < 1e-3
+                and abs(f2c.m22() - 1.0) < 1e-3
+                and abs(zoom_factor - 1.0) > 1e-3
+            ):
                 origin = f2c.map(QPointF(0.0, 0.0))
                 ox, oy = origin.x(), origin.y()
                 x0 = ox + (x0 - ox) * zoom_factor
@@ -350,7 +366,6 @@ class _CanvasPreviewOverlay(QWidget):
             max(1, int(round(bounds.width * sx))),
             max(1, int(round(bounds.height * sy))),
         )
-
 
 
 class Model(QObject, ObservableProperties):
@@ -402,7 +417,6 @@ class Model(QObject, ObservableProperties):
         self._overlay: _CanvasPreviewOverlay | None = None
         self._overlay_failed = False
         self._use_overlay_preview = True
-
 
         self.generate_seed()
         self.jobs = JobQueue()
@@ -1030,7 +1044,7 @@ class Model(QObject, ObservableProperties):
 
         if self._use_overlay_preview and not self._overlay_failed:
             if self._overlay is None:
-                self._overlay = _CanvasPreviewOverlay()
+                self._overlay = _CanvasPreviewOverlay(self.document)
             if self._overlay.show_preview(image, bounds, self.document.extent):
                 if self._layer is not None:
                     self._layer.hide()

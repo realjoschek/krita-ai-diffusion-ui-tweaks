@@ -201,15 +201,15 @@ class UpscaleWidget(QWidget):
         self.refinement_checkbox.setCheckable(True)
 
         self.style_select = StyleSelectWidget(self)
-        self.strength_slider = StrengthWidget(slider_range=(20, 50), prefix=False, parent=self)
+        self.strength_slider = StrengthWidget(range=(0.2, 0.5), prefix=False)
         strength_layout = QHBoxLayout()
         strength_layout.addWidget(QLabel(_("Strength"), self), 1)
-        strength_layout.addWidget(self.strength_slider, 3)
+        strength_layout.addWidget(self.strength_slider.widget(), 3)
 
-        self.unblur_slider = StrengthWidget(slider_range=(0, 100), prefix=False, parent=self)
+        self.unblur_slider = StrengthWidget(range=(0.0, 1.0), prefix=False)
         unblur_layout = QHBoxLayout()
         unblur_layout.addWidget(QLabel(_("Image guidance"), self), 1)
-        unblur_layout.addWidget(self.unblur_slider, 3)
+        unblur_layout.addWidget(self.unblur_slider.widget(), 3)
         root.connection.models_changed.connect(self._update_style)
 
         self.overlap_custom_combo = QComboBox(self)

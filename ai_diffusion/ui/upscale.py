@@ -247,7 +247,7 @@ class UpscaleWidget(QWidget):
         group_layout.addLayout(prompt_layout)
         self.refinement_checkbox.setLayout(group_layout)
         layout.addWidget(self.refinement_checkbox)
-        self.factor_widget.input.setMinimumWidth(self.strength_slider._input.width() + 10)
+        self.factor_widget.input.setMinimumWidth(self.strength_slider.widget().width() + 10)
 
         self.upscale_button = GenerateButton(JobKind.upscaling, self)
         self.upscale_button.operation = _("Upscale")

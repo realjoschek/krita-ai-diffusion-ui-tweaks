@@ -4,7 +4,7 @@ import json
 from textwrap import wrap as wrap_text
 from typing import ClassVar, cast
 
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     QEvent,
     QItemSelectionModel,
     QMetaObject,
@@ -15,7 +15,8 @@ from PyQt5.QtCore import (
     QUuid,
     pyqtSignal,
 )
-from PyQt5.QtGui import (
+from PyQt6.QtGui import (
+    QAction,
     QColor,
     QGuiApplication,
     QIcon,
@@ -24,10 +25,10 @@ from PyQt5.QtGui import (
     QMouseEvent,
     QPalette,
 )
-from PyQt5.QtWidgets import (
-    QAction,
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QListView,
     QListWidget,
@@ -42,17 +43,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..backend.api import InpaintContext
+from ..backend.resources import Arch
+from ..backend.workflow import FillMode, InpaintMode
 from ..image import Bounds, Extent, Image
-from ..jobs import Job, JobKind, JobParams, JobQueue, JobState
 from ..localization import translate as _
-from ..model import InpaintContext, Model, ProgressKind, RootRegion, Workspace
-from ..properties import Bind, Binding, bind, bind_combo, bind_toggle
-from ..resources import Arch
-from ..root import root
+from ..model.jobs import Job, JobKind, JobParams, JobQueue, JobState
+from ..model.model import DocumentModel, ProgressKind, Workspace
+from ..model.properties import Bind, Binding, bind, bind_combo, bind_toggle
+from ..model.region import RootRegion
+from ..model.root import root
 from ..settings import settings
 from ..style import Styles
 from ..util import ensure, flatten, sequence_equal
-from ..workflow import FillMode, InpaintMode
 from . import actions, theme
 from .region import RegionPromptWidget
 from .widget import (
@@ -68,7 +71,7 @@ from .widget import (
 
 
 class HistoryWidget(QListWidget):
-    _model: Model
+    _model: DocumentModel
     _connections: list[QMetaObject.Connection]
     _last_job_params: JobParams | None = None
 
@@ -96,13 +99,13 @@ class HistoryWidget(QListWidget):
         self._model = root.active_model
         self._connections = []
 
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setResizeMode(QListView.Adjust)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setFlow(QListView.LeftToRight)
-        self.setViewMode(QListWidget.IconMode)
+        self.setFlow(QListView.Flow.LeftToRight)
+        self.setViewMode(QListView.ViewMode.IconMode)
         self.setIconSize(theme.screen_scale(self, QSize(self._thumb_size, self._thumb_size)))
-        self.setFrameStyle(QListWidget.NoFrame)
+        self.setFrameStyle(QFrame.Shape.NoFrame)
         self.setStyleSheet(self._list_css)
         self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.setDragEnabled(False)
@@ -134,7 +137,7 @@ class HistoryWidget(QListWidget):
         return self._model
 
     @model_.setter
-    def model_(self, model: Model):
+    def model_(self, model: DocumentModel):
         Binding.disconnect_all(self._connections)
         self._model = model
         jobs = model.jobs
@@ -143,7 +146,6 @@ class HistoryWidget(QListWidget):
             jobs.job_finished.connect(self.add),
             jobs.job_discarded.connect(self.remove),
             jobs.result_used.connect(self.update_image_thumbnail),
-            jobs.result_favorite_changed.connect(self.update_image_thumbnail),
             jobs.result_discarded.connect(self.remove_image),
         ]
         self.rebuild()
@@ -311,7 +313,7 @@ class HistoryWidget(QListWidget):
             rect = self.visualItemRect(selected[0])
             font = self._apply_button.fontMetrics()
             context_visible = rect.width() >= 0.6 * self.iconSize().width()
-            apply_text_visible = font.width(_("Apply")) < 0.35 * rect.width()
+            apply_text_visible = font.horizontalAdvance(_("Apply")) < 0.35 * rect.width()
             apply_pos = QPoint(rect.left() + 3, rect.bottom() - self._apply_button.height() - 2)
             if context_visible:
                 cw = self._context_button.width()
@@ -421,8 +423,8 @@ class HistoryWidget(QListWidget):
         min_height = min(4 * self._apply_button.height(), 2 * self._thumb_size)
         if thumb.extent.height < min_height:
             thumb = Image.crop(thumb, Bounds(0, 0, thumb.extent.width, min_height))
-        if job.is_favorite(index):
-            thumb.draw_image(self._applied_icon, offset=(4, 4))
+        if job.result_was_used(index):  # add tiny star icon to mark used results
+            thumb.draw_image(self._applied_icon, offset=(thumb.extent.width - 28, 4))
         return thumb.to_icon()
 
     def _show_context_menu(self, pos: QPoint):
@@ -449,10 +451,6 @@ class HistoryWidget(QListWidget):
                 menu.setToolTipsVisible(True)
             menu.addAction(_("Discard Image"), self._discard_image)
             menu.addSeparator()
-            menu.addAction(
-                _("Clear History (Keep Favorites)"),
-                lambda: self._clear_all(keep_favorites=True),
-            )
             menu.addAction(_("Clear History"), self._clear_all)
             menu.exec(self.mapToGlobal(pos))
 
@@ -512,16 +510,16 @@ class HistoryWidget(QListWidget):
 
     def _discard_image(self, confirm=True):
         confirm = confirm and settings.confirm_discard_image
-        reply = QMessageBox.Yes
+        reply = QMessageBox.StandardButton.Yes
         if confirm:
             reply = QMessageBox.warning(
                 self,
                 _("Discard Image"),
                 _("Are you sure you want to discard the selected images?"),
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             items = self.selectedItems()
             next_item = self.row(items[0]) if len(items) > 0 else -1
             for item in items:
@@ -530,25 +528,18 @@ class HistoryWidget(QListWidget):
             if next_item >= 0:
                 self.setCurrentRow(next_item, QItemSelectionModel.SelectionFlag.Current)
 
-    def _clear_all(self, keep_favorites=False):
-        title = _("Clear History (Keep Favorites)") if keep_favorites else _("Clear History")
-        text = (
-            _("Are you sure you want to discard all generated images (except favorites)?")
-            if keep_favorites
-            else _("Are you sure you want to discard all generated images?")
-        )
+    def _clear_all(self):
         reply = QMessageBox.warning(
             self,
-            title,
-            text,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            _("Clear History"),
+            _("Are you sure you want to discard all generated images?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if reply == QMessageBox.Yes:
-            self._model.jobs.clear(keep_favorites=keep_favorites)
-            self.rebuild()  # rebuild to reflect changes (some jobs might be removed)
-            if not keep_favorites:
-                self._model.hide_preview(delete_layer=True)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._model.jobs.clear()
+            self.clear()
+            self._model.hide_preview(delete_layer=True)
 
 
 class AnimatedListItem(QListWidgetItem):
@@ -579,7 +570,7 @@ class AnimatedListItem(QListWidgetItem):
 
 
 class CustomInpaintWidget(QWidget):
-    _model: Model
+    _model: DocumentModel
     _model_bindings: list[QMetaObject.Connection | Binding]
 
     def __init__(self, parent: QWidget):
@@ -632,7 +623,7 @@ class CustomInpaintWidget(QWidget):
         )
         self.context_combo.setMinimumContentsLength(20)
         self.context_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLength
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.context_combo.currentIndexChanged.connect(self.set_context)
 
@@ -650,7 +641,7 @@ class CustomInpaintWidget(QWidget):
         return self._model
 
     @model.setter
-    def model(self, model: Model):
+    def model(self, model: DocumentModel):
         if self._model != model:
             Binding.disconnect_all(self._model_bindings)
             self._model = model
@@ -720,7 +711,7 @@ class ProgressBar(QProgressBar):
         return self._model
 
     @model.setter
-    def model(self, model: Model):
+    def model(self, model: DocumentModel):
         if self._model != model:
             Binding.disconnect_all(self._model_bindings)
             self._model = model
@@ -748,7 +739,7 @@ class ProgressBar(QProgressBar):
 class GenerationWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self._model: Model = root.active_model
+        self._model: DocumentModel = root.active_model
         self._model_bindings: list[QMetaObject.Connection | Binding] = []
 
         layout = QVBoxLayout(self)
@@ -766,7 +757,7 @@ class GenerationWidget(QWidget):
         self.region_prompt = RegionPromptWidget(self)
         layout.addWidget(self.region_prompt)
 
-        self.strength_slider = StrengthWidget(parent=self)
+        self.strength_slider = StrengthWidget()
         self.layer_count_widget = LayerCountWidget(self)
         self.layer_count_widget.setVisible(False)
         self.add_region_button = create_wide_tool_button("region-add", _("Add Region"), self)
@@ -774,7 +765,7 @@ class GenerationWidget(QWidget):
             "control-add", _("Add Control Layer"), self
         )
         strength_layout = QHBoxLayout()
-        strength_layout.addWidget(self.strength_slider)
+        strength_layout.addWidget(self.strength_slider.widget())
         strength_layout.addWidget(self.layer_count_widget)
         strength_layout.addWidget(self.add_control_button)
         strength_layout.addWidget(self.add_region_button)
@@ -782,23 +773,6 @@ class GenerationWidget(QWidget):
 
         self.custom_inpaint = CustomInpaintWidget(self)
         layout.addWidget(self.custom_inpaint)
-
-        from .style import LoraItem, get_shared_lora_filter
-        from ..files import FileFilter
-
-        # Simple LoRA selector list (just the items, no header/buttons)
-        self._lora_items: list[LoraItem] = []
-        self._updating_loras = False  # Flag to prevent saves during rebuild
-        # Use shared filter if available, otherwise create a local one
-        self._loras_filter = get_shared_lora_filter()
-        if self._loras_filter is None:
-            self._loras_filter = FileFilter(root.files.loras)
-            self._loras_filter.available_only = True
-        self._lora_layout = QVBoxLayout()
-        self._lora_layout.setContentsMargins(0, 0, 0, 0)
-        self._lora_container = QWidget(self)
-        self._lora_container.setLayout(self._lora_layout)
-        layout.addWidget(self._lora_container)
 
         self.generate_button = GenerateButton(JobKind.diffusion, self)
 
@@ -831,24 +805,9 @@ class GenerationWidget(QWidget):
         self.queue_button = QueueButton(parent=self)
         self.queue_button.setFixedHeight(self.generate_button.height() - 2)
 
-        self.queue_random_button = QToolButton(self)
-        self.queue_random_button.setText("10x")
-        self.queue_random_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.queue_random_button.setToolTip(_("Queue 10 individual generations with random seeds"))
-        self.queue_random_button.setFixedHeight(self.generate_button.height() - 2)
-        self.queue_random_button.clicked.connect(lambda: self.model.generate_random_times(10))
-
-        self.cancel_queue_button = QToolButton(self)
-        self.cancel_queue_button.setIcon(theme.icon("cancel"))
-        self.cancel_queue_button.setToolTip(_("Cancel all queued generations"))
-        self.cancel_queue_button.setFixedHeight(self.generate_button.height() - 2)
-        self.cancel_queue_button.clicked.connect(actions.cancel_queued)
-
         actions_layout = QHBoxLayout()
         actions_layout.addLayout(generate_layout)
         actions_layout.addWidget(self.queue_button)
-        actions_layout.addWidget(self.queue_random_button)
-        actions_layout.addWidget(self.cancel_queue_button)
         layout.addLayout(actions_layout)
 
         self.progress_bar = ProgressBar(self)
@@ -868,7 +827,7 @@ class GenerationWidget(QWidget):
         return self._model
 
     @model.setter
-    def model(self, model: Model):
+    def model(self, model: DocumentModel):
         if self._model != model:
             Binding.disconnect_all(self._model_bindings)
             self._model = model
@@ -886,7 +845,6 @@ class GenerationWidget(QWidget):
                 model.regions.active_changed.connect(self.update_generate_options),
                 model.region_only_changed.connect(self.update_generate_options),
                 model.style_changed.connect(self.update_generate_options),
-                model.style_changed.connect(self._update_lora_widget),
                 model.edit_mode_changed.connect(self.update_generate_options),
                 self.add_control_button.clicked.connect(self.add_control),
                 self.add_region_button.clicked.connect(self.add_region),
@@ -901,7 +859,6 @@ class GenerationWidget(QWidget):
             self.progress_bar.model = model
             self.strength_slider.model = model
             self.history.model_ = model
-            self._update_lora_widget()
             self.update_generate_options()
 
     def apply_result(self, item: QListWidgetItem):
@@ -1017,7 +974,7 @@ class GenerationWidget(QWidget):
                 menu.actions()[1].setEnabled(self.model.can_edit)
 
         menu.setFixedWidth(width)
-        menu.exec_(self.generate_button.mapToGlobal(pos))
+        menu.exec(self.generate_button.mapToGlobal(pos))
 
     def change_inpaint_mode(self, mode: InpaintMode, is_edit: bool | None):
         self.model.inpaint.mode = mode
@@ -1032,84 +989,6 @@ class GenerationWidget(QWidget):
 
     def add_control(self):
         self.model.active_regions.add_control()
-
-    def _add_lora_item(self, lora_data: dict | None = None):
-        """Add a new LoRA selector item."""
-        from .style import LoraItem
-
-        item = LoraItem(self._loras_filter, parent=self._lora_container)
-        item.changed.connect(self._on_lora_changed)
-        item.removed.connect(self._remove_lora_item)
-        if lora_data:
-            item.value = lora_data
-        self._lora_items.append(item)
-        self._lora_layout.addWidget(item)
-
-    def _remove_lora_item(self, item: QWidget):
-        """Remove a LoRA selector item."""
-        if item in self._lora_items:
-            self._lora_items.remove(item)
-            self._lora_layout.removeWidget(item)
-            item.deleteLater()
-            self._on_lora_changed()
-
-    def _on_lora_changed(self):
-        """Save LoRA changes when any item changes."""
-        # Don't save while we're rebuilding the widget
-        if self._updating_loras:
-            return
-
-        if self.model and self.model.style:
-            # Get current loras from widgets
-            current_loras = [item.value for item in self._lora_items]
-
-            # Don't save if we're in the middle of updating (items being cleared/recreated)
-            # This prevents saving an empty list during widget rebuild
-            if len(current_loras) == 0 and len(self.model.style.loras) > 0:
-                return  # Don't overwrite existing LoRAs with empty list
-
-            self.model.style.loras = current_loras
-            self.model.style.save()
-
-    def _update_lora_widget(self):
-        """Update the LoRA items when the style changes."""
-        if not self.model or not self.model.style:
-            return
-
-        # Don't update if loras attribute doesn't exist yet (style still loading)
-        if not hasattr(self.model.style, "loras"):
-            return
-
-        # Get the LoRAs we need to display
-        style_loras = self.model.style.loras if self.model.style.loras else []
-
-        # Only update if the LoRAs have actually changed
-        current_loras = [item.value for item in self._lora_items if item.isVisible()]
-        if len(current_loras) == len(style_loras):
-            # Check if they're the same
-            if all(
-                c.get("name") == s.get("name")
-                and c.get("strength") == s.get("strength")
-                and c.get("enabled") == s.get("enabled")
-                for c, s in zip(current_loras, style_loras)
-            ):
-                return  # No changes, don't rebuild
-
-        # Set flag to prevent saves during rebuild
-        self._updating_loras = True
-
-        # Clear existing items
-        for item in self._lora_items:
-            self._lora_layout.removeWidget(item)
-            item.deleteLater()
-        self._lora_items.clear()
-
-        # Add items from style
-        for lora_data in style_loras:
-            self._add_lora_item(lora_data)
-
-        # Clear flag after rebuild
-        self._updating_loras = False
 
     def update_generate_options(self):
         if not self.model.has_document:

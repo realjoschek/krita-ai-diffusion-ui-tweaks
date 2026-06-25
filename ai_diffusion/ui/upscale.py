@@ -1,6 +1,6 @@
-from PyQt5.QtCore import QEvent, QMetaObject, Qt, pyqtSignal
-from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QEvent, QMetaObject, Qt, pyqtSignal
+from PyQt6.QtGui import QCursor, QEnterEvent
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -14,12 +14,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..jobs import JobKind
+from ..backend.resources import ControlMode, UpscalerName
 from ..localization import translate as _
-from ..model import Model, TileOverlapMode, UpscaleMethod
-from ..properties import Bind, Binding, bind, bind_combo, bind_toggle
-from ..resources import ControlMode, UpscalerName
-from ..root import root
+from ..model.jobs import JobKind
+from ..model.model import DocumentModel, TileOverlapMode, UpscaleMethod
+from ..model.properties import Bind, Binding, bind, bind_combo, bind_toggle
+from ..model.root import root
 from . import theme
 from .settings_widgets import WarningIcon
 from .switch import SwitchWidget
@@ -100,7 +100,7 @@ class FactorWidget(QWidget):
         else:
             self.target_label.setText("")
 
-    def enterEvent(self, a0: QEvent | None):
+    def enterEvent(self, a0: QEnterEvent | None):
         self.update_target_extent()
         super().enterEvent(a0)
 
@@ -110,7 +110,7 @@ class FactorWidget(QWidget):
 
 
 class UpscaleWidget(QWidget):
-    _model: Model
+    _model: DocumentModel
     _model_bindings: list[QMetaObject.Connection | Binding]
 
     def __init__(self):
@@ -278,7 +278,7 @@ class UpscaleWidget(QWidget):
         return self._model
 
     @model.setter
-    def model(self, model: Model):
+    def model(self, model: DocumentModel):
         if self._model != model:
             Binding.disconnect_all(self._model_bindings)
             self._model = model
@@ -385,7 +385,7 @@ class UpscaleWidget(QWidget):
         )
 
     def _update_style(self):
-        arch = self._model.arch
+        arch = self.model.arch
         if arch.is_edit:
             tooltip = _("Not supported for edit models")
             self.strength_slider.setEnabled(False)
@@ -393,6 +393,8 @@ class UpscaleWidget(QWidget):
             self.unblur_slider.setEnabled(False)
             self.unblur_slider.setToolTip(tooltip)
         else:
+            self.strength_slider.setEnabled(True)
+            self.strength_slider.setToolTip("")
             has_unblur = False
             if client := root.connection.client_if_connected:
                 models = client.models.for_arch(self.model.arch)
@@ -407,7 +409,7 @@ class UpscaleWidget(QWidget):
             self.unblur_slider.setToolTip(tooltip)
 
     def _update_prompt(self):
-        self.use_prompt_switch.setText(_("On") if self.model.upscale.use_prompt else _("Off"))
+        self.use_prompt_value.setText(_("On") if self.model.upscale.use_prompt else _("Off"))
         text = self.model.regions.positive
         if len(self.model.regions) > 0:
             text = f"<b>{len(self.model.regions)} " + _("Regions") + f"</b> | {text}"

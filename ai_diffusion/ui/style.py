@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import cast
 
 from krita import Krita
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal
-from PyQt5.QtGui import QColor, QDesktopServices, QPalette
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QPalette
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QCompleter,
@@ -23,12 +23,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..client import filter_supported_styles, resolve_arch
+from ..backend.client import filter_supported_styles, resolve_arch
+from ..backend.resources import Arch, ResourceId, ResourceKind, search_paths
+from ..backend.server import Server
 from ..files import File, FileFilter, FileFormat, FileSource
 from ..localization import translate as _
-from ..resources import Arch, ResourceId, ResourceKind, search_paths
-from ..root import root
-from ..server import Server
+from ..model.root import root
 from ..settings import ServerMode, Setting, settings
 from ..style import SamplerPresets, Style, Styles, StyleSettings
 from . import theme
@@ -38,6 +38,7 @@ from .settings_widgets import (
     LineEditSetting,
     SettingsTab,
     SettingWidget,
+    SettingWidgetBase,
     SliderSetting,
     SpinBoxSetting,
     SwitchSetting,
@@ -47,26 +48,6 @@ from .settings_widgets import (
 from .switch import SwitchWidget
 from .theme import SignalBlocker, add_header, icon
 from .widget import create_framed_label
-
-
-# Shared LoRA filter instance
-_shared_lora_filter = None
-
-
-def get_shared_lora_filter():
-    """Get the shared LoRA filter instance used across Settings and Generation tabs."""
-    global _shared_lora_filter
-    if _shared_lora_filter is None:
-        try:
-            if hasattr(root, "files") and hasattr(root.files, "loras"):
-                _shared_lora_filter = FileFilter(root.files.loras)
-                _shared_lora_filter.available_only = True
-            else:
-                # Fallback: create later when root is ready
-                return None
-        except Exception:
-            return None
-    return _shared_lora_filter
 
 
 class LoraItem(QWidget):
@@ -89,7 +70,7 @@ class LoraItem(QWidget):
         small_font.setPointSize(small_font.pointSize() - 1)
 
         grey_text = self.palette()
-        grey_text.setColor(QPalette.ColorRole.Foreground, QColor(theme.grey))
+        grey_text.setColor(QPalette.ColorRole.WindowText, QColor(theme.grey))
 
         self._advanced_button = ExpanderButton(parent=self)
         self._advanced_button.toggled.connect(self._expand)
@@ -429,7 +410,7 @@ class LoraList(QWidget):
         self._item_list.addWidget(item)
         self.value_changed.emit()
 
-    def _remove_item(self, item: QWidget):
+    def _remove_item(self, item: LoraItem):
         # removing and creating items is slow, hiding allows reuse
         item.is_active = False
         self._item_list.removeWidget(item)
@@ -534,10 +515,12 @@ class SamplerWidget(QWidget):
         info_layout.addStretch()
         info_layout.addWidget(self._user_presets_link)
 
-        self._steps = SliderSetting(StyleSettings.sampler_steps, self, 1, 100)
+        self._steps = SliderSetting(StyleSettings.sampler_steps, self, 1, 100, suffix=" steps")
+        self._steps.slider.setSoftMaximum(50)
         self._steps.value_changed.connect(self.notify_changed)
 
-        self._cfg = SliderSetting(StyleSettings.cfg_scale, self, 1.0, 20.0)
+        self._cfg = SliderSetting(StyleSettings.cfg_scale, self, 1.0, 24.0, decimals=1)
+        self._cfg.slider.setSoftMaximum(12.0)
         self._cfg.value_changed.connect(self.notify_changed)
 
         extended_layout = QVBoxLayout()
@@ -598,10 +581,6 @@ class SamplerWidget(QWidget):
 
 
 class StylePresets(SettingsTab):
-    _checkpoint_advanced_widgets: list[SettingWidget]
-    _default_sampler_widgets: list[SettingWidget]
-    _live_sampler_widgets: list[SettingWidget]
-
     def __init__(self, server: Server):
         super().__init__(_("Style Presets"))
         self.server = server
@@ -664,14 +643,14 @@ class StylePresets(SettingsTab):
         frame_layout.addLayout(builtin_layout)
 
         frame = QFrame(self)
-        frame.setFrameStyle(QFrame.StyledPanel)
+        frame.setFrameStyle(QFrame.Shape.StyledPanel)
         frame.setLineWidth(1)
         frame.setLayout(frame_layout)
         self._layout.addWidget(frame)
 
-        self._style_widgets: dict[str, SettingWidget] = {}
+        self._style_widgets: dict[str, SettingWidgetBase] = {}
 
-        def add(name: str, widget: SettingWidget):
+        def add(name: str, widget: SettingWidgetBase | SettingWidget):
             self._style_widgets[name] = widget
             self._layout.addWidget(widget)
             widget.value_changed.connect(self.write)
@@ -702,19 +681,24 @@ class StylePresets(SettingsTab):
         checkpoint_advanced.toggled.connect(self._toggle_checkpoint_advanced)
         self._layout.addWidget(checkpoint_advanced)
 
-        self._arch_select: ComboBoxSetting = add(
+        self._arch_select = add(
             "architecture", ComboBoxSetting(StyleSettings.architecture, parent=self)
         )
         self._vae = add("vae", ComboBoxSetting(StyleSettings.vae, parent=self))
 
-        self._clip_skip = add("clip_skip", SpinBoxSetting(StyleSettings.clip_skip, self, 0, 12))
+        self._clip_skip = self._style_widgets["clip_skip"] = SpinBoxSetting(
+            StyleSettings.clip_skip, self, 0, 12
+        )
+        self._clip_skip.value_changed.connect(self.write)
+        self._layout.addWidget(self._clip_skip)
         self._clip_skip_check = self._clip_skip.add_checkbox(_("Override"))
         self._clip_skip_check.toggled.connect(self._toggle_clip_skip)
 
-        self._resolution_spin = add(
-            "preferred_resolution",
-            SpinBoxSetting(StyleSettings.preferred_resolution, self, 0, 2048, step=8),
+        self._resolution_spin = self._style_widgets["preferred_resolution"] = SpinBoxSetting(
+            StyleSettings.preferred_resolution, self, 0, 2048, step=8
         )
+        self._resolution_spin.value_changed.connect(self.write)
+        self._layout.addWidget(self._resolution_spin)
         resolution_check = self._resolution_spin.add_checkbox(_("Override"))
         resolution_check.toggled.connect(self._toggle_preferred_resolution)
 
@@ -739,55 +723,9 @@ class StylePresets(SettingsTab):
             widget.indent = 1
         self._toggle_checkpoint_advanced(False)
 
-        # LoRA file management (without showing the list)
-        add_header(self._layout, StyleSettings.loras)
-
-        # Use shared filter if available, otherwise create a local one
-        self._loras_filter = get_shared_lora_filter()
-        if self._loras_filter is None:
-            self._loras_filter = FileFilter(root.files.loras)
-            self._loras_filter.available_only = True
-
-        self._add_lora_button = QPushButton(_("Add"), self)
-        self._add_lora_button.setMinimumWidth(100)
-        self._add_lora_button.clicked.connect(self._add_lora_to_style)
-
-        self._upload_lora_button = QPushButton(theme.icon("upload"), "  " + _("Upload"), self)
-        self._upload_lora_button.setToolTip(_("Import a LoRA file from your local system"))
-        self._upload_lora_button.clicked.connect(self._upload_lora)
-
-        self._lora_filter_combo = QComboBox(self)
-        self._lora_filter_combo.setMinimumWidth(150)
-        self._lora_filter_combo.currentIndexChanged.connect(self._apply_lora_filter)
-
-        self._refresh_lora_button = QToolButton(self)
-        self._refresh_lora_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self._refresh_lora_button.setIcon(Krita.instance().icon("reload-preset"))
-        self._refresh_lora_button.setToolTip(_("Look for new LoRA files"))
-        self._refresh_lora_button.clicked.connect(root.connection.refresh)
-
-        self._open_lora_folder_button = None
-        if settings.server_mode is ServerMode.managed:
-            self._open_lora_folder_button = QToolButton(self)
-            self._open_lora_folder_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            self._open_lora_folder_button.setIcon(Krita.instance().icon("document-open"))
-            self._open_lora_folder_button.setToolTip(_("Open folder containing LoRA files"))
-            self._open_lora_folder_button.clicked.connect(self._open_lora_folder)
-
-        lora_buttons_layout = QHBoxLayout()
-        lora_buttons_layout.addWidget(self._add_lora_button)
-        lora_buttons_layout.addWidget(self._upload_lora_button)
-        lora_buttons_layout.addWidget(self._lora_filter_combo)
-        lora_buttons_layout.addWidget(self._refresh_lora_button)
-        if self._open_lora_folder_button:
-            lora_buttons_layout.addWidget(self._open_lora_folder_button)
-        lora_buttons_layout.addStretch()
-
-        self._layout.addLayout(lora_buttons_layout)
-
-        root.files.loras.rowsInserted.connect(self._collect_lora_filters)
-        root.files.loras.rowsRemoved.connect(self._collect_lora_filters)
-        self._collect_lora_filters()
+        self._loras = LoraList(StyleSettings.loras, self)
+        self._layout.addWidget(self._loras)
+        self._loras.value_changed.connect(self.write)
 
         add("style_prompt", LineEditSetting(StyleSettings.style_prompt, self))
         add("negative_prompt", LineEditSetting(StyleSettings.negative_prompt, self))
@@ -815,6 +753,8 @@ class StylePresets(SettingsTab):
                 _("Open the folder where checkpoints are stored"),
                 self._open_checkpoints_folder,
             )
+        if self._loras.open_folder_button:
+            self._loras.open_folder_button.clicked.connect(self._open_lora_folder)
 
         self._populate_style_list()
         Styles.list().changed.connect(self._update_style_list)
@@ -958,62 +898,6 @@ class StylePresets(SettingsTab):
         self._set_checkpoint_warning()
         self._show_edit_style(style)
 
-    def _collect_lora_filters(self):
-        """Populate the LoRA filter combo with available folders."""
-        with SignalBlocker(self._lora_filter_combo):
-            self._lora_filter_combo.clear()
-            self._lora_filter_combo.addItem(icon("filter"), "All")
-            folders = set()
-            for lora in root.files.loras:
-                if lora.source is not FileSource.unavailable:
-                    parts = Path(lora.id).parts
-                    for i in range(1, len(parts)):
-                        folders.add("/".join(parts[:i]))
-            folder_icon = Krita.instance().icon("document-open")
-            for folder in sorted(folders, key=lambda x: x.lower()):
-                self._lora_filter_combo.addItem(folder_icon, folder)
-        self._add_lora_button.setEnabled(root.files.loras.rowCount() > 0)
-
-    def _add_lora_to_style(self):
-        """Add a LoRA from available files to the current style."""
-        if root.files.loras.rowCount() > 0:
-            # Just add first available LoRA for now - user can change it in Generation tab
-            lora_file = root.files.loras.data(root.files.loras.index(0, 0))
-            if lora_file:
-                # Create a new list to trigger the changed signal
-                new_loras = self.current_style.loras.copy()
-                new_loras.append({"name": lora_file, "strength": 1.0, "enabled": True})
-                self.current_style.loras = new_loras
-                self.current_style.save()
-
-    def _apply_lora_filter(self):
-        """Apply the LoRA filter to the global LoRA filter."""
-        # Get the selected filter text
-        filter_text = self._lora_filter_combo.currentText()
-        filter_prefix = filter_text if filter_text != "All" else ""
-
-        # Update the global LoRA filter
-        self._loras_filter.name_prefix = filter_prefix
-
-        # Save to style
-        self.current_style.lora_filter = filter_text
-        self.current_style.save()
-
-    def _upload_lora(self):
-        """Upload a LoRA file from the local filesystem."""
-        filepath = QFileDialog.getOpenFileName(
-            self, _("Select LoRA file"), None, "LoRA files (*.safetensors)"
-        )
-        if filepath[0]:
-            path = Path(filepath[0])
-            if client := root.connection.client_if_connected:
-                max_size = client.features.max_upload_size
-                if max_size and path.stat().st_size > max_size:
-                    _show_file_too_large_warning(max_size, self)
-                    return
-            file = File.local(path, FileFormat.lora, compute_hash=True)
-            root.files.loras.add(file)
-
     def _toggle_preferred_resolution(self, checked: bool):
         if checked and self._resolution_spin.value == 0:
             sd_ver = resolve_arch(self.current_style, root.connection.client_if_connected)
@@ -1038,6 +922,7 @@ class StylePresets(SettingsTab):
             self._builtin_message.setVisible(is_builtin)
             self._builtin_copy.setVisible(is_builtin)
             self._checkpoint_select.setEnabled(not is_builtin)
+            self._loras.setEnabled(not is_builtin)
             for widget in self._style_widgets.values():
                 widget.setEnabled(not is_builtin)
             for widget in self._checkpoint_advanced_widgets:
@@ -1070,12 +955,9 @@ class StylePresets(SettingsTab):
         with self._write_guard:
             for name, widget in self._style_widgets.items():
                 widget.value = getattr(style, name)
+            self._loras.value = style.loras  # type: ignore
             self._default_sampler.read(style)
             self._live_sampler.read(style)
-            # Load and apply the saved filter
-            if hasattr(style, "lora_filter"):
-                self._lora_filter_combo.setCurrentText(style.lora_filter)
-                self._apply_lora_filter()
         self._show_builtin_info(style)
         self._read_checkpoint(style)
         self._enable_checkpoint_advanced()
@@ -1096,6 +978,7 @@ class StylePresets(SettingsTab):
         for name, widget in self._style_widgets.items():
             if widget.value is not None:
                 setattr(style, name, widget.value)
+        style.loras = self._loras.value
         self._write_checkpoint(style)
         self._default_sampler.write(style)
         self._live_sampler.write(style)

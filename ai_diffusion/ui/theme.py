@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QSize, Qt
-from PyQt5.QtGui import QFontMetrics, QGuiApplication, QIcon, QPalette, QPixmap
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import QObject, QSize, Qt
+from PyQt6.QtGui import QFontMetrics, QGuiApplication, QIcon, QPalette, QPixmap
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ..client import Client
+from ..backend.client import Client
 from ..files import FileFormat
 from ..localization import translate as _
 from ..platform_tools import is_windows
@@ -14,7 +14,8 @@ from ..settings import Setting
 from ..style import Arch
 from ..util import client_logger as log
 
-_palette = QGuiApplication.palette()
+_app = QGuiApplication.instance()
+_palette = _app.palette() if isinstance(_app, QGuiApplication) else QPalette()
 is_dark = _palette.color(QPalette.ColorRole.Window).lightness() < 128
 
 base = _palette.color(QPalette.ColorRole.Base).name()
@@ -26,7 +27,7 @@ highlight = "#80d0f0" if is_dark else "#335577"
 strong_highlight = "#70d0ff" if is_dark else "#2040ff"
 progress_alt = "#a16207" if is_dark else "#ca8a04"
 active = _palette.color(QPalette.ColorRole.Highlight).name()
-line = _palette.color(QPalette.ColorRole.Background).darker(120).name()
+line = _palette.color(QPalette.ColorRole.Window).darker(120).name()
 line_base = _palette.color(QPalette.ColorRole.Base).darker(120).name()
 
 flat_combo_stylesheet = f"""
@@ -53,7 +54,10 @@ def icon(name: str):
 def checkpoint_icon(arch: Arch, format: FileFormat | None = None, client: Client | None = None):
     if client:
         if not client.supports_arch(arch):
-            return icon("warning")
+            if arch is Arch.sdxl and client.supports_arch(Arch.illu):
+                arch = Arch.illu  # assume SDXL models are Illustrious if SDXL isn't supported
+            else:
+                return icon("warning")
         if format is FileFormat.diffusion and not client.models.for_arch(arch).has_te_vae:
             return icon("warning")
     if arch is Arch.sd15:
@@ -78,6 +82,10 @@ def checkpoint_icon(arch: Arch, format: FileFormat | None = None, client: Client
         return icon("sd-version-qwen")
     elif arch is Arch.zimage:
         return icon("sd-version-z-image")
+    elif arch is Arch.anima:
+        return icon("sd-version-anima")
+    elif arch is Arch.ernie:
+        return icon("sd-version-ernie")
     else:
         log.warning(f"Unresolved SD version {arch}, cannot fetch icon")
         return icon("warning")

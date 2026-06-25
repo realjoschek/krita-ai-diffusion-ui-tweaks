@@ -3,12 +3,13 @@ from __future__ import annotations
 import struct
 import zlib
 from collections.abc import Callable, Iterable
+from enum import Enum
 from math import sqrt
 from pathlib import Path
 from typing import NamedTuple, SupportsIndex
 
-from PyQt5.QtCore import QBuffer, QByteArray, QFile, QIODevice, QRect, QSize, Qt
-from PyQt5.QtGui import (
+from PyQt6.QtCore import QBuffer, QByteArray, QFile, QIODevice, QRect, QSize, Qt
+from PyQt6.QtGui import (
     QColorSpace,
     QIcon,
     QImage,
@@ -290,14 +291,26 @@ def extent_equal(a: QImage, b: QImage):
     return a.width() == b.width() and a.height() == b.height()
 
 
-_qt_supports_webp = None
+_qt_supports_webp: bool | None = None
 
 
-def qt_supports_webp():
+def qt_supports_webp(extent: Extent | None = None):
+    # Qt6's VP8L encoder produces a degenerate 36-byte file for images smaller than
+    # this threshold that its own decoder cannot read back. 64x64 is safely above it.
+    if extent is not None and (extent.width < 64 or extent.height < 64):
+        return False
+
+    # Check if the qt6-image-formats package is installed, which adds WEBP support
     global _qt_supports_webp
     if _qt_supports_webp is None:
         _qt_supports_webp = QByteArray(b"webp") in QImageWriter.supportedImageFormats()
     return _qt_supports_webp
+
+
+class BlendMode(Enum):
+    alpha = 1  # alpha compositing (src over dst)
+    keep = 2  # keep dst alpha, replace RGB (dst atop src)
+    replace = 3  # replace dst with src
 
 
 class Image:
@@ -319,16 +332,35 @@ class Image:
         return img
 
     @staticmethod
-    def from_packed_bytes(data: QByteArray, extent: Extent, channels=4):
+    def from_packed_bytes(data: QByteArray, extent: Extent, channels: int | None = None):
+        if channels is None:
+            channels = 4 if len(data) == extent.pixel_count * 4 else 1
         assert channels in {4, 1}
+        expected_size = extent.pixel_count * channels
+        if len(data) != expected_size:
+            raise ValueError(
+                f"Can't read image: data size {len(data)} does not match expected size {expected_size}."
+                " Only 8-bit/channel image formats are supported."
+            )
         stride = extent.width * channels
         format = QImage.Format.Format_ARGB32 if channels == 4 else QImage.Format.Format_Grayscale8
-        qimg = QImage(data, extent.width, extent.height, stride, format)
-        return Image(qimg)
+        qimg = QImage(data.data(), extent.width, extent.height, stride, format)
+        return Image(qimg.copy())
 
     @staticmethod
     def copy(image: Image):
         return Image(QImage(image._qimage))
+
+    @staticmethod
+    def flatten(layer_stack: Iterable[Image]):
+        base = None
+        for layer in layer_stack:
+            if base is None:
+                base = Image.copy(layer)
+            else:
+                base.draw_image(layer)
+        assert base is not None, "No images passed to flatten"
+        return base
 
     @property
     def width(self):
@@ -523,11 +555,11 @@ class Image:
             return buffer
         else:
             ptr = ensure(self._qimage.constBits(), "Accessing data of invalid image")
-            return QByteArray(ptr.asstring(self._qimage.byteCount()))
+            return QByteArray(ptr.asstring(self._qimage.sizeInBytes()))
 
     @property
     def size(self):  # in bytes
-        return self._qimage.byteCount()
+        return self._qimage.sizeInBytes()
 
     def to_array(self):
         import numpy as np
@@ -545,7 +577,7 @@ class Image:
         self, buffer: QIODevice, format=ImageFileFormat.png, override_quality: int | None = None
     ):
         # Compression takes time for large images and blocks the UI, might be worth to thread.
-        if not qt_supports_webp():
+        if not qt_supports_webp(self.extent):
             format = format.no_webp_fallback
         format_str = format.extension
         quality = override_quality if override_quality is not None else format.quality
@@ -556,7 +588,7 @@ class Image:
             info = f"[{self.width}x{self.height} format={self._qimage.format()}] -> {format_str}@{quality}"
             if is_linux and format_str == "webp":
                 log.warning(
-                    "To enable support for writing webp images, you may need to install the 'qt5-imageformats' package."
+                    "To enable support for writing webp images, you may need to install the 'qt6-imageformats' package."
                 )
                 global _qt_supports_webp
                 _qt_supports_webp = False
@@ -582,6 +614,19 @@ class Image:
     def to_icon(self):
         return QIcon(self.to_pixmap())
 
+    def to_packed_bytes(self):
+        self.to_krita_format()
+        w, h = self.extent
+        c = 4 if self.is_rgba else 1
+        bits = self._qimage.constBits()
+        assert bits is not None, "Accessing data of invalid image"
+        ptr = bits.asarray(w * h * c)
+        buf = bytearray()
+        for i in range(h):
+            row_start = i * self._qimage.bytesPerLine()
+            buf += bytes(ptr[row_start : row_start + w * c])
+        return QByteArray(bytes(buf))
+
     def to_pil(self):
         from PIL import Image as PILImage
 
@@ -598,10 +643,12 @@ class Image:
         assert self.is_mask
         return Mask(bounds or Bounds(0, 0, *self.extent), self._qimage)
 
-    def draw_image(self, image: Image, offset: tuple[int, int] = (0, 0), keep_alpha=False):
+    def draw_image(self, image: Image, offset: tuple[int, int] = (0, 0), blend=BlendMode.alpha):
         mode = QPainter.CompositionMode.CompositionMode_SourceOver
-        if keep_alpha:
+        if blend == BlendMode.keep:
             mode = QPainter.CompositionMode.CompositionMode_SourceAtop
+        elif blend == BlendMode.replace:
+            mode = QPainter.CompositionMode.CompositionMode_Source
         painter = QPainter(self._qimage)
         painter.setCompositionMode(mode)
         painter.drawImage(*offset, image._qimage)
@@ -625,7 +672,7 @@ class Image:
     def save_png_with_metadata(
         self, filepath: str | Path, metadata_text: str, format: ImageFileFormat | None = None
     ):
-        png_bytes = bytes(self.to_bytes(format or ImageFileFormat.png))
+        png_bytes = self.to_bytes(format or ImageFileFormat.png).data()
         self.save_png_w_itxt(filepath, png_bytes, "parameters", metadata_text)
 
     def debug_save(self, name):
@@ -819,7 +866,7 @@ class Mask:
     def to_image(self, extent: Extent | None = None):
         if extent is None:
             return Image(self.image)
-        img = QImage(extent.width, extent.height, QImage.Format_Grayscale8)
+        img = QImage(extent.width, extent.height, QImage.Format.Format_Grayscale8)
         img.fill(0)
         painter = QPainter(img)
         painter.drawImage(self.bounds.x, self.bounds.y, self.image)

@@ -5,10 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from krita import Krita
-from PyQt5.QtCore import QMetaObject, QPoint, QSize, Qt, QUrl, QUuid, pyqtSignal
-from PyQt5.QtGui import QDesktopServices, QFontMetrics, QIcon, QPalette
-from PyQt5.QtWidgets import (
-    QAction,
+from PyQt6.QtCore import QMetaObject, QPoint, QSize, Qt, QUrl, QUuid, pyqtSignal
+from PyQt6.QtGui import QAction, QDesktopServices, QFontMetrics, QIcon, QPalette
+from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -30,19 +29,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..client import TextOutput
-from ..custom_workflow import (
+from ..backend.client import TextOutput
+from ..localization import translate as _
+from ..model.custom_workflow import (
     CustomGenerationMode,
     CustomParam,
     ParamKind,
     SortedWorkflows,
     WorkflowSource,
 )
-from ..jobs import JobKind
-from ..localization import translate as _
-from ..model import Model
-from ..properties import Bind, Binding, bind, bind_combo
-from ..root import root
+from ..model.jobs import JobKind
+from ..model.model import DocumentModel
+from ..model.properties import Bind, Binding, bind, bind_combo
+from ..model.root import root
 from ..settings import settings
 from ..style import Styles
 from ..util import base_type_match, clamp, ensure
@@ -59,26 +58,27 @@ from .widget import ErrorBox, StyleSelectWidget, TextPromptWidget, WorkspaceSele
 class LayerSelect(QComboBox):
     value_changed = pyqtSignal()
 
-    def __init__(self, filter: str | None = None, parent: QWidget | None = None):
+    def __init__(self, filter: str | None, model: DocumentModel, parent: QWidget | None = None):
         super().__init__(parent)
+        self._model = model
         self.param = None
         self.filter = filter
 
         self.setContentsMargins(0, 0, 0, 0)
         self.setMinimumContentsLength(20)
-        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLength)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.currentIndexChanged.connect(lambda _: self.value_changed.emit())
 
         self._update()
-        root.active_model.layers.changed.connect(self._update)
+        self._model.layers.changed.connect(self._update)
 
     def _update(self):
         if self.filter is None:
-            layers = root.active_model.layers.all
+            layers = self._model.layers.all
         elif self.filter == "image":
-            layers = root.active_model.layers.images
+            layers = self._model.layers.images
         elif self.filter == "mask":
-            layers = root.active_model.layers.masks
+            layers = self._model.layers.masks
         else:
             assert False, f"Unknown filter: {self.filter}"
 
@@ -259,7 +259,9 @@ class BoolParamWidget(QWidget):
 
         fm = QFontMetrics(self.font())
         self._label = QLabel(self)
-        self._label.setMinimumWidth(max(fm.width(self._true_text), fm.width(self._false_text)) + 4)
+        self._label.setMinimumWidth(
+            max(fm.horizontalAdvance(self._true_text), fm.horizontalAdvance(self._false_text)) + 4
+        )
         self._widget = SwitchWidget(parent)
         self._widget.toggled.connect(self._notify)
         layout.addWidget(self._widget)
@@ -363,7 +365,7 @@ class ChoiceParamWidget(QComboBox):
         super().__init__(parent)
         self.param = param
         self.setMinimumContentsLength(20)
-        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLength)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
 
         if param.choices:
             self.addItems(param.choices)
@@ -423,12 +425,14 @@ CustomParamWidget = (
 )
 
 
-def _create_param_widget(param: CustomParam, parent: "WorkflowParamsWidget") -> CustomParamWidget:
+def _create_param_widget(
+    param: CustomParam, model: DocumentModel, parent: "WorkflowParamsWidget"
+) -> CustomParamWidget:
     match param.kind:
         case ParamKind.image_layer:
-            return LayerSelect("image", parent)
+            return LayerSelect("image", model, parent)
         case ParamKind.mask_layer:
-            return LayerSelect("mask", parent)
+            return LayerSelect("mask", model, parent)
         case ParamKind.number_int:
             return IntParamWidget(param, parent)
         case ParamKind.number_float:
@@ -449,21 +453,30 @@ def _create_param_widget(param: CustomParam, parent: "WorkflowParamsWidget") -> 
             assert False, f"Unknown param kind: {param.kind}"
 
 
+def _create_reset_button(parent: QWidget, text: str):
+    fh = parent.fontMetrics().height()
+    button = QToolButton(parent)
+    button.setFixedSize(fh + 2, fh + 2)
+    button.setIcon(theme.icon("reset"))
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+    button.setAutoRaise(True)
+    button.setToolTip(text)
+    return button
+
+
+ParamWidgetList = list[QLabel | CustomParamWidget]
+
+
 class GroupHeader(QWidget):
     def __init__(self, text: str, parent: QWidget | None = None):
         super().__init__(parent)
-        self._group_widgets: list[CustomParamWidget] = []
+        self._group_widgets: ParamWidgetList = []
 
         self._expander = ExpanderButton(text, self)
         self._expander.toggled.connect(self._show_group)
 
-        fh = self.fontMetrics().height()
-        self._reset_button = QToolButton(self)
-        self._reset_button.setFixedSize(fh + 2, fh + 2)
-        self._reset_button.setIcon(theme.icon("reset"))
-        self._reset_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self._reset_button.setAutoRaise(True)
-        self._reset_button.setToolTip(_("Reset all parameters in this group"))
+        reset_text = _("Reset all parameters in this group")
+        self._reset_button = _create_reset_button(self, reset_text)
         self._reset_button.clicked.connect(self._reset_group)
 
         layout = QHBoxLayout(self)
@@ -471,7 +484,7 @@ class GroupHeader(QWidget):
         layout.addWidget(self._expander, stretch=1, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self._reset_button, alignment=Qt.AlignmentFlag.AlignRight)
 
-    def set_group_widgets(self, widgets: list[CustomParamWidget], show_group: bool):
+    def set_group_widgets(self, widgets: ParamWidgetList, show_group: bool):
         self._group_widgets = widgets
         self._expander.setChecked(show_group)
         self._show_group(show_group)
@@ -491,20 +504,32 @@ class WorkflowParamsWidget(QWidget):
     value_changed = pyqtSignal()
     activated = pyqtSignal()
 
-    def __init__(self, params: list[CustomParam], parent: QWidget | None = None):
+    def __init__(
+        self, params: list[CustomParam], model: DocumentModel, parent: QWidget | None = None
+    ):
         super().__init__(parent)
         self._widgets: dict[str, CustomParamWidget] = {}
         self._max_group_height = 0
 
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 2, 0)
-        layout.setColumnMinimumWidth(0, 10)
-        layout.setColumnMinimumWidth(2, 10)
-        layout.setColumnStretch(3, 1)
+        layout.setColumnMinimumWidth(0, 10)  # column 0: indentation for grouped widgets
+        layout.setColumnMinimumWidth(2, 10)  # column 2: spacing between label and widget
+        layout.setColumnStretch(3, 1)  # column 3: the widget
         self.setLayout(layout)
 
         params = sorted(params)
-        current_group: tuple[str, GroupHeader | None, list[CustomParamWidget]] = ("", None, [])
+        current_group: tuple[str, GroupHeader | None, ParamWidgetList] = ("", None, [])
+
+        header = QLabel(_("Workflow Parameters"), self)
+        reset_text = _("Reset all parameters to their default values")
+        self._reset_button = _create_reset_button(self, reset_text)
+        self._reset_button.clicked.connect(self._reset_all)
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.addWidget(header, stretch=1, alignment=Qt.AlignmentFlag.AlignLeft)
+        header_layout.addWidget(self._reset_button, alignment=Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(header_layout, layout.rowCount(), 0, 1, 4)
 
         for p in params:
             group, expander, group_widgets = current_group
@@ -515,7 +540,7 @@ class WorkflowParamsWidget(QWidget):
                 current_group = (p.group, expander, group_widgets)
                 layout.addWidget(expander, layout.rowCount(), 0, 1, 4)
             label = QLabel(p.display_name, self)
-            widget = _create_param_widget(p, self)
+            widget = _create_param_widget(p, model, self)
             widget.value_changed.connect(self._notify)
             row = layout.rowCount()
             col, col_span = (0, 2) if p.group == "" else (1, 1)
@@ -530,13 +555,18 @@ class WorkflowParamsWidget(QWidget):
     def _notify(self):
         self.value_changed.emit()
 
-    def _create_group(self, expander: GroupHeader | None, widgets: list[CustomParamWidget]):
+    def _create_group(self, expander: GroupHeader | None, widgets: ParamWidgetList):
         display_height = sum(w.sizeHint().height() for w in widgets if not isinstance(w, QLabel))
         display_height += 2 * len(widgets)  # spacing
         if expander is not None:
             expander.set_group_widgets(widgets, show_group=len(self._widgets) < 7)
             display_height += expander.sizeHint().height()
         self._max_group_height = max(self._max_group_height, display_height + 4)
+
+    def _reset_all(self):
+        for w in self._widgets.values():
+            if w.param is not None and w.param.default is not None:
+                w.value = w.param.default
 
     @property
     def value(self):
@@ -845,7 +875,7 @@ class CustomWorkflowWidget(QWidget):
         return self._model
 
     @model.setter
-    def model(self, model: Model):
+    def model(self, model: DocumentModel):
         if self._model != model:
             Binding.disconnect_all(self._model_bindings)
             self._model = model
@@ -885,7 +915,7 @@ class CustomWorkflowWidget(QWidget):
         width = self._generate_button.width() + self._mode_button.width()
         pos = QPoint(0, self._generate_button.height())
         self._generate_menu.setFixedWidth(width)
-        self._generate_menu.exec_(self._generate_button.mapToGlobal(pos))
+        self._generate_menu.exec(self._generate_button.mapToGlobal(pos))
 
     def _update_ui(self):
         is_live_mode = self.model.custom.mode is CustomGenerationMode.live
@@ -939,7 +969,7 @@ class CustomWorkflowWidget(QWidget):
             self._params_widget.deleteLater()
             self._params_widget = None
         if len(self.model.custom.metadata) > 0:
-            self._params_widget = WorkflowParamsWidget(self.model.custom.metadata, self)
+            self._params_widget = WorkflowParamsWidget(self.model.custom.metadata, self.model, self)
             self._params_widget.value = self.model.custom.params  # set default values from model
             self.model.custom.params = self._params_widget.value  # set default values from widgets
             self._params_widget.value_changed.connect(self._change_params)
@@ -994,8 +1024,7 @@ class CustomWorkflowWidget(QWidget):
             self,
             _("Delete Workflow"),
             _("Are you sure you want to delete the current workflow?") + f"\n{filepath}",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if q == QMessageBox.StandardButton.Yes:
             self.model.custom.remove_workflow()
@@ -1045,8 +1074,7 @@ class CustomWorkflowWidget(QWidget):
                     name=name
                 )
                 + details,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if q == QMessageBox.StandardButton.Yes:
                 overwrite = True
@@ -1080,7 +1108,7 @@ class CustomWorkflowPlaceholder(QWidget):
         return self._model
 
     @model.setter
-    def model(self, model: Model):
+    def model(self, model: DocumentModel):
         if self._model != model:
             Binding.disconnect_all(self._connections)
             self._model = model

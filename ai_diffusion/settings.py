@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, NamedTuple
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from .localization import translate as _
 from .platform_tools import is_macos, is_windows
@@ -28,6 +28,7 @@ class ServerBackend(Enum):
     mps = (_("Use MPS (Metal Performance Shader)"), is_macos)
     directml = (_("Use DirectML (GPU)"), is_windows)
     xpu = (_("Use XPU (Intel GPU)"), not is_macos)
+    rocm = (_("Use ROCm (AMD GPU)"), not is_macos)
 
     @staticmethod
     def supported():

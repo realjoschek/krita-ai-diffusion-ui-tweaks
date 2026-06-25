@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import logging
 import logging.handlers
@@ -12,8 +11,8 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, TypeVar
 
-from PyQt5 import sip
-from PyQt5.QtCore import QObject, QStandardPaths
+from PyQt6 import sip
+from PyQt6.QtCore import QObject, QStandardPaths
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -28,16 +27,21 @@ class PluginError(Exception):
 
 
 def _get_user_data_dir():
-    if importlib.util.find_spec("krita") is None:
+    import krita
+
+    if getattr(krita, "IS_MOCK", False):  # mock Krita used in tests
         dir = plugin_dir.parent / ".appdata"
         dir.mkdir(exist_ok=True)
         return dir
+
     try:
-        dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
+        dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
         if dir.exists() and "krita" in dir.name.lower():
             dir = dir / "ai_diffusion"
         else:
-            dir = Path(QStandardPaths.writableLocation(QStandardPaths.GenericDataLocation))
+            dir = Path(
+                QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericDataLocation)
+            )
             dir = dir / "krita-ai-diffusion"
         dir.mkdir(exist_ok=True)
     except Exception:
@@ -200,6 +204,11 @@ def find_unused_path(path: Path):
 
 
 def acquire_elements(l: list[QOBJECT]) -> list[QOBJECT]:
+    import krita
+
+    if getattr(krita, "IS_MOCK", False):
+        return l
+
     # Many Pykrita functions return a `QList<QObject*>` where the objects are
     # allocated for the caller. SIP does not handle this case and just leaks
     # the objects outright. Fix this by taking explicit ownership of the objects.

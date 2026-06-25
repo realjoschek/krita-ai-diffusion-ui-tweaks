@@ -1,22 +1,22 @@
 from __future__ import annotations
 
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
+    QComboBox,
+    QCompleter,
     QHBoxLayout,
     QLabel,
     QSpinBox,
-    QComboBox,
-    QCompleter,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
 
-from ..style import Style
 from ..files import FileFilter
 from ..root import root
+from ..style import Style
+from .style import LoraList
 from .switch import SwitchWidget
 from .theme import SignalBlocker
-from .style import LoraList
 
 
 class QuickLoraItem(QWidget):
@@ -84,11 +84,11 @@ class QuickLoraItem(QWidget):
 
     @property
     def value(self):
-        return dict(
-            name=self._current_lora_name,
-            strength=self.strength,
-            enabled=self._enabled.isChecked(),
-        )
+        return {
+            "name": self._current_lora_name,
+            "strength": self.strength,
+            "enabled": self._enabled.isChecked(),
+        }
 
     @value.setter
     def value(self, v: dict):
@@ -200,7 +200,7 @@ class QuickLoraList(QWidget):
                 item.value = style.loras[i]
             else:
                 # Empty slot
-                item.value = dict(name="", strength=1.0, enabled=True)
+                item.value = {"name": "", "strength": 1.0, "enabled": True}
 
     def set_style(self, style: Style):
         """Update the widget to show LoRAs from the given style."""

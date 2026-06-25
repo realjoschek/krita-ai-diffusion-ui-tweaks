@@ -56,7 +56,7 @@ from ..model.root import root
 from ..settings import settings
 from ..style import Styles
 from ..util import ensure, flatten, sequence_equal
-from . import actions, theme
+from . import theme
 from .region import RegionPromptWidget
 from .widget import (
     ErrorBox,

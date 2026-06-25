@@ -46,7 +46,7 @@ from ..model.connection import ConnectionState, apply_performance_preset
 from ..model.properties import Binding
 from ..model.root import collect_diagnostics, root
 from ..model.updates import UpdateState
-from ..settings import ImageFileFormat, PerformancePreset, ServerMode, Setting, Settings, settings
+from ..settings import ImageFileFormat, PerformancePreset, ServerMode, Settings, settings
 from ..style import Style
 from .server import ServerWidget
 from .settings_widgets import (

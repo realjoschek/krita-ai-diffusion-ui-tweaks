@@ -193,7 +193,7 @@ class UpscaleWidget(QWidget):
         self.noise_checkbox = QCheckBox(_("Inject Noise"), self)
         layout.addWidget(self.noise_checkbox)
         self.noise_slider = StrengthWidget(
-            slider_range=(0, 20), prefix=_("Noise Strength") + ": ", parent=self
+            range=(0.0, 0.2), prefix=_("Noise Strength") + ": "
         )
         layout.addWidget(self.noise_slider)
 

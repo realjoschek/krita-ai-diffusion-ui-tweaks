@@ -195,7 +195,7 @@ class UpscaleWidget(QWidget):
         self.noise_slider = StrengthWidget(
             range=(0.0, 0.2), prefix=_("Noise Strength") + ": "
         )
-        layout.addWidget(self.noise_slider)
+        layout.addWidget(self.noise_slider.widget())
 
         self.refinement_checkbox = QGroupBox(_("Refine upscaled image"), self)
         self.refinement_checkbox.setCheckable(True)

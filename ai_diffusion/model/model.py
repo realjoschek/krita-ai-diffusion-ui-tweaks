@@ -213,6 +213,25 @@ class DocumentModel(QObject, ObservableProperties):
     def generate_replace(self):
         self._generate(QueueMode.replace)
 
+    def generate_random_times(self, count: int):
+        was_fixed = self.fixed_seed
+        was_batch = self.batch_count
+        self.fixed_seed = False
+        self.batch_count = 1
+
+        try:
+            mode = self.queue_mode
+            self._generate(mode)
+
+            if mode == QueueMode.replace:
+                mode = QueueMode.back
+
+            for _ in range(count - 1):
+                self._generate(mode)
+        finally:
+            self.fixed_seed = was_fixed
+            self.batch_count = was_batch
+
     def _generate(self, queue_mode: QueueMode):
         """Enqueue image generation for the current setup."""
         ok, msg = self._doc.check_color_mode()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QComboBox,
     QCompleter,
     QHBoxLayout,
@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..files import FileFilter
-from ..root import root
+from ..model.root import root
 from ..style import Style
 from .style import LoraList
 from .switch import SwitchWidget

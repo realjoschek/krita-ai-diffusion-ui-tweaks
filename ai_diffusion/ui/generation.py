@@ -56,7 +56,7 @@ from ..model.root import root
 from ..settings import settings
 from ..style import Styles
 from ..util import ensure, flatten, sequence_equal
-from . import theme
+from . import actions, theme
 from .region import RegionPromptWidget
 from .widget import (
     ErrorBox,
@@ -805,9 +805,24 @@ class GenerationWidget(QWidget):
         self.queue_button = QueueButton(parent=self)
         self.queue_button.setFixedHeight(self.generate_button.height() - 2)
 
+        self.queue_random_button = QToolButton(self)
+        self.queue_random_button.setText("10x")
+        self.queue_random_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.queue_random_button.setToolTip(_("Queue 10 individual generations with random seeds"))
+        self.queue_random_button.setFixedHeight(self.generate_button.height() - 2)
+        self.queue_random_button.clicked.connect(lambda: self.model.generate_random_times(10))
+
+        self.cancel_queue_button = QToolButton(self)
+        self.cancel_queue_button.setIcon(theme.icon("cancel"))
+        self.cancel_queue_button.setToolTip(_("Cancel all queued generations"))
+        self.cancel_queue_button.setFixedHeight(self.generate_button.height() - 2)
+        self.cancel_queue_button.clicked.connect(actions.cancel_queued)
+
         actions_layout = QHBoxLayout()
         actions_layout.addLayout(generate_layout)
         actions_layout.addWidget(self.queue_button)
+        actions_layout.addWidget(self.queue_random_button)
+        actions_layout.addWidget(self.cancel_queue_button)
         layout.addLayout(actions_layout)
 
         self.progress_bar = ProgressBar(self)

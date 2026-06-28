@@ -608,7 +608,7 @@
     "VAE Model": null,
     "Legacy Upscaling": null,
     "Encode Tiled": null,
-    "No DiT model selected for SeedVR2 upscaling.": null
+    "No DiT model selected for SeedVR2 upscaling.": null,
     "Edit canvas with text instructions": "使用文本指令编辑画布",
     "Flux 2 models": "Flux 2 模型",
     "Compact generation and edit model": "生成和编辑一体模型",
